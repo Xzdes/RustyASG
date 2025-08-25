@@ -1,0 +1,19 @@
+[package]
+name = "rustyasg"
+version = "0.1.0"
+edition = "2021"
+authors = ["Xzdes"]
+description = "A deep learning framework in Rust, focusing on autograd and Transformer architectures."
+readme = "README.md"
+repository = "https://github.com/Xzdes/RustyAsg"
+license = "MIT"
+keywords = ["deep-learning", "machine-learning", "autograd", "neural-network"]
+categories = ["science"]
+
+
+[dependencies]
+ndarray = { version = "0.16.1", features = ["serde"] }
+rand = "0.9.2"
+ndarray-rand = "0.15.0"
+thiserror = "2.0.16"
+serde = { version = "1.0", features = ["derive"] }
