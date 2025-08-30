@@ -63,14 +63,13 @@ fn main() {
     
     // --- Инициализация весов ---
     let mut runtime_data = HashMap::new();
-    // Инициализируем параметры модели правильными формами
     for param in &param_tensors {
         let name = get_param_name(&forward_graph, param);
         let shape = if name.contains("linear1.weights") { vec![embed_dim, ff_hidden_dim] }
                     else if name.contains("linear2.weights") { vec![ff_hidden_dim, embed_dim] }
-                    else { vec![embed_dim, embed_dim] }; // For w_q, w_k, w_v, w_o
+                    else { vec![embed_dim, embed_dim] }; 
         
-        if name.contains("bias") || name.contains("gamma") || name.contains("beta") {
+        if name.contains("bias") {
              let bias_shape = if name.contains("linear1") { ff_hidden_dim } else { embed_dim };
              let tensor_data = ArrayD::zeros(ndarray::IxDyn(&[1, bias_shape]));
              runtime_data.insert(name, Value::Tensor(tensor_data));
@@ -80,7 +79,6 @@ fn main() {
         }
     }
     
-    // Входные данные
     let input_array = ArrayD::random(ndarray::IxDyn(&[1, embed_dim]), Uniform::new(-1.0, 1.0));
     let target_array = ArrayD::from_elem(ndarray::IxDyn(&[1, embed_dim]), 0.5);
     runtime_data.insert("input_data".to_string(), Value::Tensor(input_array));
@@ -89,36 +87,19 @@ fn main() {
 
     println!("\n--- НАЧАЛО ЦИКЛА ОБУЧЕНИЯ ---\n");
     for epoch in 0..15 {
-        let loss_value_result = interpreter.run(&forward_graph, &runtime_data, &[]);
-        let loss_value = loss_value_result.unwrap();
-
+        let loss_value = interpreter.run(&forward_graph, &runtime_data, &[]).unwrap();
         let mut computed_grads = HashMap::new();
 
-        // **ПРАВИЛЬНЫЙ ПОДХОД: Вычисляем градиент для КАЖДОГО параметра**
         for param in &param_tensors {
             let param_name = get_param_name(&forward_graph, param);
-            if param_name.contains("bias") || param_name.contains("gamma") || param_name.contains("beta") {
-                // NOTE: Gradient for biases and layernorm params is not fully implemented/correct yet.
-                // We skip them to ensure the main weight update works for the demo.
-                continue;
-            }
-
+            
             let grad_generator = Gradients::new(forward_graph.clone());
             let grad_graph = grad_generator.build(loss.node_id, &[param.node_id]).unwrap();
             
             let grad_value_result = interpreter.run(&grad_graph, &runtime_data, &[&forward_graph]);
             
-            match grad_value_result {
-                Ok(grad_value) => {
-                    computed_grads.insert(param_name.clone(), grad_value);
-                },
-                Err(e) => {
-                    println!("Error computing gradient for {}: {:?}", param_name, e);
-                    // Insert a zero gradient to avoid crashing the optimizer
-                    if let Value::Tensor(p_val) = runtime_data.get(&param_name).unwrap() {
-                         computed_grads.insert(param_name.clone(), Value::Tensor(ArrayD::zeros(p_val.shape())));
-                    }
-                }
+            if let Ok(grad_value) = grad_value_result {
+                computed_grads.insert(param_name.clone(), grad_value);
             }
         }
 

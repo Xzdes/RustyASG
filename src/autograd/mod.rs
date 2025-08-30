@@ -117,7 +117,6 @@ impl Gradients {
 
                 NodeType::MatrixMultiply(a_id, b_id) => {
                     let imported_b = self.import_node(b_id);
-                    // --- THE FIX ---
                     let b_transposed_id = self.grad_asg.add_node(None, NodeType::Transpose(imported_b, 0, 1));
                     let grad_a = self.grad_asg.add_node(None, NodeType::MatrixMultiply(upstream_grad_id, b_transposed_id));
                     self.accumulate_grad(a_id, grad_a);

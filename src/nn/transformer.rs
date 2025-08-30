@@ -6,13 +6,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 /// Один блок кодировщика Трансформера.
-///
-/// Состоит из двух основных под-слоев:
-/// 1. Слой Multi-Head Attention.
-/// 2. Слой FeedForward.
-///
-/// Вокруг каждого из этих под-слоев применяется LayerNorm и остаточное соединение (`Add`).
-/// Эта архитектура известна как "pre-normalization" и стабилизирует обучение.
 pub struct TransformerBlock {
     /// Слой многоголового внимания.
     attention: MultiHeadAttention,
@@ -26,14 +19,6 @@ pub struct TransformerBlock {
 
 impl TransformerBlock {
     /// Создает новый блок Трансформера.
-    ///
-    /// # Аргументы
-    ///
-    /// * `context` - Контекст графа для создания параметров.
-    /// * `embed_dim` - Размерность встраиваний (например, 512).
-    /// * `num_heads` - Количество "голов" внимания.
-    /// * `ff_hidden_dim` - Размерность скрытого слоя в FeedForward сети.
-    /// * `name` - Уникальное имя для слоя.
     pub fn new(
         context: &Rc<RefCell<GraphContext>>,
         embed_dim: usize,
@@ -57,18 +42,15 @@ impl TransformerBlock {
 
 impl Module for TransformerBlock {
     /// Прямой проход через блок Трансформера, строящий подграф операций.
-    ///
-    /// Логика: `x + Attention(Norm(x))` -> `x + FeedForward(Norm(x))`
     fn forward(&self, inputs: &Tensor) -> Tensor {
-        // 1. Под-слой Multi-Head Attention с остаточным соединением
-        let normed_inputs1 = self.norm1.forward(inputs);
-        let attention_output = self.attention.forward(&normed_inputs1);
-        let x = inputs + &attention_output;
+        // --- ВРЕМЕННОЕ УПРОЩЕНИЕ ДЛЯ ОТЛАДКИ ---
+        // Мы убираем LayerNorm и остаточные соединения, чтобы проверить основной путь градиента.
 
-        // 2. Под-слой FeedForward с остаточным соединением
-        let normed_inputs2 = self.norm2.forward(&x);
-        let ff_output = self.feed_forward.forward(&normed_inputs2);
-        let final_output = &x + &ff_output;
+        // 1. Под-слой Multi-Head Attention
+        let attention_output = self.attention.forward(inputs);
+        
+        // 2. Под-слой FeedForward
+        let final_output = self.feed_forward.forward(&attention_output);
 
         final_output
     }
@@ -77,9 +59,9 @@ impl Module for TransformerBlock {
     fn parameters(&self) -> Vec<Tensor> {
         let mut params = Vec::new();
         params.extend(self.attention.parameters());
-        params.extend(self.norm1.parameters());
+        // params.extend(self.norm1.parameters()); // Временно отключаем
         params.extend(self.feed_forward.parameters());
-        params.extend(self.norm2.parameters());
+        // params.extend(self.norm2.parameters()); // Временно отключаем
         params
     }
 }
