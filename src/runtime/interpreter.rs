@@ -8,7 +8,7 @@
 //! и вернуть конечный результат.
 
 use crate::asg::{Asg, AsgId, NodeId, NodeType, Value};
-use ndarray::{s, Ix2, Zip};
+use ndarray::{Ix2, Zip};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -61,6 +61,7 @@ impl<'a> ExecutionContext<'a> {
 
     /// Главная функция, которая рекурсивно вычисляет значение для заданного узла.
     fn evaluate_node(&mut self, asg_id: AsgId, node_id: NodeId) -> Result<Value, RuntimeError> {
+        // Если значение уже вычислено, возвращаем его из кэша.
         if let Some(value) = self.memo.get(&(asg_id, node_id)) {
             return Ok(value.clone());
         }
@@ -93,7 +94,8 @@ impl<'a> ExecutionContext<'a> {
                 source_asg_id,
                 source_node_id,
             } => {
-                // Если узел внешний, вычисляем его в контексте его собственного графа
+                // Если узел внешний, вычисляем его в контексте его собственного графа.
+                // Это ключевая механика для работы графа градиентов.
                 self.evaluate_node(*source_asg_id, *source_node_id)
             }
 
@@ -109,10 +111,22 @@ impl<'a> ExecutionContext<'a> {
                 op_subtract(lhs, rhs)
             }
 
+            NodeType::Multiply(lhs_id, rhs_id) => {
+                let lhs = self.evaluate_node(asg_id, *lhs_id)?;
+                let rhs = self.evaluate_node(asg_id, *rhs_id)?;
+                op_multiply(lhs, rhs)
+            }
+
             NodeType::MatrixMultiply(lhs_id, rhs_id) => {
                 let lhs = self.evaluate_node(asg_id, *lhs_id)?;
                 let rhs = self.evaluate_node(asg_id, *rhs_id)?;
                 op_matmul(lhs, rhs)
+            }
+
+            NodeType::GreaterThan(lhs_id, rhs_id) => {
+                let lhs = self.evaluate_node(asg_id, *lhs_id)?;
+                let rhs = self.evaluate_node(asg_id, *rhs_id)?;
+                op_greater_than(lhs, rhs)
             }
 
             NodeType::ReLU(operand_id) => {
@@ -130,18 +144,6 @@ impl<'a> ExecutionContext<'a> {
                 op_transpose(operand, *axis1, *axis2)
             }
 
-            NodeType::GreaterThan(lhs_id, rhs_id) => {
-                let lhs = self.evaluate_node(asg_id, *lhs_id)?;
-                let rhs = self.evaluate_node(asg_id, *rhs_id)?;
-                op_greater_than(lhs, rhs)
-            }
-
-            NodeType::Multiply(lhs_id, rhs_id) => {
-                let lhs = self.evaluate_node(asg_id, *lhs_id)?;
-                let rhs = self.evaluate_node(asg_id, *rhs_id)?;
-                op_multiply(lhs, rhs)
-            }
-
             NodeType::Power(base_id, power_id) => {
                 let base = self.evaluate_node(asg_id, *base_id)?;
                 let power = self.evaluate_node(asg_id, *power_id)?;
@@ -150,6 +152,9 @@ impl<'a> ExecutionContext<'a> {
             
             NodeType::Broadcast(source_id, target_shape_id) => {
                 let source = self.evaluate_node(asg_id, *source_id)?;
+                // Важно: форма для трансляции берется из узла во внешнем (исходном) графе.
+                // Поэтому мы рекурсивно вызываем evaluate_node для target_shape_id,
+                // который, скорее всего, будет узлом External.
                 let target_shape_provider = self.evaluate_node(asg_id, *target_shape_id)?;
                 op_broadcast(source, target_shape_provider)
             }
@@ -200,7 +205,8 @@ impl Default for Interpreter {
 fn op_add(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     match (lhs, rhs) {
         (Value::Tensor(a), Value::Tensor(b)) => {
-            let result = &a + &b; // ndarray поддерживает broadcasting
+            // ndarray поддерживает broadcasting "из коробки"
+            let result = &a + &b;
             Ok(Value::Tensor(result))
         }
         _ => Err(RuntimeError::TypeError {
@@ -239,6 +245,7 @@ fn op_multiply(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
 fn op_greater_than(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     match (lhs, rhs) {
         (Value::Tensor(a), Value::Tensor(b)) => {
+            // Поддерживаем сравнение с другим тензором или со скаляром
             if a.shape() != b.shape() && b.ndim() != 0 {
                 return Err(RuntimeError::ShapeError(format!(
                     "Incompatible shapes for GreaterThan: {:?} and {:?}",
@@ -343,100 +350,46 @@ fn op_broadcast(source: Value, target_shape_provider: Value) -> Result<Value, Ru
     if source_tensor.ndim() != 0 {
         return Err(RuntimeError::UnimplementedOperation("Broadcast only supports scalars for now".to_string()));
     }
-    let scalar_value = source_tensor.first().unwrap();
-    let result = ndarray::ArrayD::from_elem(target_tensor.shape(), *scalar_value);
+    let scalar_value = *source_tensor.first().expect("Scalar tensor for broadcast source must not be empty");
+    let result = ndarray::ArrayD::from_elem(target_tensor.shape(), scalar_value);
     Ok(Value::Tensor(result))
 }
-
 
 fn op_matmul(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     let a = match lhs {
         Value::Tensor(val) => val,
-        _ => {
-            return Err(RuntimeError::TypeError {
-                expected: "Tensor".to_string(),
-                actual: "Other".to_string(),
-            })
-        }
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
     };
 
     let b = match rhs {
         Value::Tensor(val) => val,
-        _ => {
-            return Err(RuntimeError::TypeError {
-                expected: "Tensor".to_string(),
-                actual: "Other".to_string(),
-            })
-        }
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
     };
+    
+    // Для нашего MLP примера достаточно обработать случай (N, M) @ (M, K)
+    // Где N - размер батча, M и K - размерности признаков.
+    // ndarray::dot() обрабатывает это корректно для 2D матриц.
+    if a.ndim() >= 2 && b.ndim() == 2 {
+        let a_mat = a.view().into_dimensionality::<Ix2>()
+            .map_err(|e| RuntimeError::ShapeError(format!("LHS cannot be viewed as a 2D matrix: {}", e)))?;
+        let b_mat = b.view().into_dimensionality::<Ix2>()
+            .map_err(|e| RuntimeError::ShapeError(format!("RHS is not a 2D matrix: {}", e)))?;
 
-    // Определяем, какую операцию выполнять, на основе размерностей
-    let result_data = match (a.ndim(), b.ndim()) {
-        (2, 2) => {
-            let a_mat = a.view().into_dimensionality::<Ix2>().unwrap();
-            let b_mat = b.view().into_dimensionality::<Ix2>().unwrap();
-            if a_mat.shape()[1] != b_mat.shape()[0] {
-                return Err(RuntimeError::ShapeError(format!(
-                    "Incompatible shapes for 2D matmul: {:?} and {:?}",
-                    a.shape(),
-                    b.shape()
-                )));
-            }
-            Ok(a_mat.dot(&b_mat).into_dyn())
+        if a_mat.shape()[1] != b_mat.shape()[0] {
+            return Err(RuntimeError::ShapeError(format!(
+                "Incompatible shapes for matmul: {:?} and {:?}",
+                a.shape(),
+                b.shape()
+            )));
         }
-        (3, 2) => {
-            let batch = a.shape()[0];
-            let in_dim = a.shape()[1];
-            let common_dim = a.shape()[2];
-            let out_dim = b.shape()[1];
 
-            if b.shape() != &[common_dim, out_dim] {
-                return Err(RuntimeError::ShapeError(format!(
-                    "Incompatible shapes for 3D-2D matmul: {:?} and {:?}",
-                    a.shape(),
-                    b.shape()
-                )));
-            }
-
-            let mut out = ndarray::ArrayD::zeros(ndarray::IxDyn(&[batch, in_dim, out_dim]));
-            let b_mat = b.view().into_dimensionality::<Ix2>().unwrap();
-
-            for i in 0..batch {
-                let a_mat = a.slice(s![i, .., ..]).into_dimensionality::<Ix2>().unwrap();
-                let mut out_slice = out.slice_mut(s![i, .., ..]);
-                out_slice.assign(&a_mat.dot(&b_mat));
-            }
-            Ok(out)
-        }
-        (3, 3) => {
-            let batch = a.shape()[0];
-            let m = a.shape()[1];
-            let k = a.shape()[2];
-            let n = b.shape()[2];
-
-            if b.shape() != &[batch, k, n] {
-                return Err(RuntimeError::ShapeError(format!(
-                    "Incompatible shapes for 3D-3D matmul: {:?} and {:?}",
-                    a.shape(),
-                    b.shape()
-                )));
-            }
-
-            let mut out = ndarray::ArrayD::zeros(ndarray::IxDyn(&[batch, m, n]));
-            for i in 0..batch {
-                let a_mat = a.slice(s![i, .., ..]).into_dimensionality::<Ix2>().unwrap();
-                let b_mat = b.slice(s![i, .., ..]).into_dimensionality::<Ix2>().unwrap();
-                let mut out_slice = out.slice_mut(s![i, .., ..]);
-                out_slice.assign(&a_mat.dot(&b_mat));
-            }
-            Ok(out)
-        }
-        _ => Err(RuntimeError::UnimplementedOperation(format!(
-            "Matmul for dimensions {:?} and {:?}",
-            a.shape(),
-            b.shape()
-        ))),
-    }?;
-
-    Ok(Value::Tensor(result_data))
+        let result_data = a_mat.dot(&b_mat).into_dyn();
+        Ok(Value::Tensor(result_data))
+    } else {
+        Err(RuntimeError::UnimplementedOperation(format!(
+            "Interpreter matmul is only implemented for N-D x 2D tensors. Got dimensions {} and {}",
+            a.ndim(),
+            b.ndim()
+        )))
+    }
 }

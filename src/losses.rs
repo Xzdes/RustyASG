@@ -4,7 +4,6 @@
 //! символьные `Tensor`-дескрипторы и добавляют в граф узлы, необходимые
 //! для вычисления значения ошибки.
 
-use crate::asg::NodeType;
 use crate::tensor::Tensor;
 use ndarray::arr0;
 

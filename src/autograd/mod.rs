@@ -194,15 +194,21 @@ impl Gradients {
                     self.accumulate_grad(x_id, grad_x);
                 }
 
-                // Листовые и недифференцируемые узлы
+                // Листовые и недифференцируемые узлы, которые не распространяют градиент
+                // назад к своим входам. Для них ничего делать не нужно.
                 NodeType::Input { .. }
                 | NodeType::Parameter { .. }
                 | NodeType::Literal(_)
                 | NodeType::External { .. }
-                | NodeType::Transpose(_, _, _)
+                // Операции, градиент по которым мы пока не умеем (или не должны) считать.
+                // Например, grad(A > B) по A или B обычно не определен.
                 | NodeType::GreaterThan(_, _)
-                | NodeType::Broadcast(_, _) => (),
+                // Transpose - это просто перестановка, его градиент тривиально проходит "сквозь"
+                // него, но мы пока не реализовали это. Для matmul градиент считается явно,
+                // поэтому этого достаточно.
+                | NodeType::Transpose(_, _, _) => (),
 
+                // Явно указываем, что остальные операции не поддерживаются.
                 ref op => return Err(AutogradError::NonDifferentiableOperation(op.clone())),
             }
         }
@@ -212,9 +218,13 @@ impl Gradients {
             .map(|id| self.get_or_create_zero_grad(*id))
             .collect();
 
+        // Устанавливаем выход графа градиентов.
+        // Пока что поддерживаем только один выход (градиент для первого параметра).
+        // В будущем можно будет создать узел "список" и вернуть все градиенты.
         if let Some(first_output) = grad_outputs.get(0) {
             self.grad_asg.set_output(*first_output);
         } else {
+            // Если не просили градиентов, создаем фиктивный выход.
             let dummy_output = self
                 .grad_asg
                 .add_node(None, NodeType::Literal(Value::Unit));
@@ -224,6 +234,7 @@ impl Gradients {
         Ok(self.grad_asg)
     }
 
+    /// Рекурсивно строит топологически отсортированный список узлов, начиная с заданного.
     fn build_sorted_graph(
         &self,
         node_id: NodeId,
@@ -237,6 +248,7 @@ impl Gradients {
             .get(&node_id)
             .ok_or(AutogradError::NodeNotFound(node_id))?;
 
+        // Определяем, от каких узлов зависит текущий узел.
         let inputs = match &node.node_type {
             NodeType::Add(a, b)
             | NodeType::Subtract(a, b)
@@ -247,6 +259,12 @@ impl Gradients {
             | NodeType::Broadcast(a, b) => vec![*a, *b],
             NodeType::ReLU(a) | NodeType::Sum(a) => vec![*a],
             NodeType::Transpose(a, _, _) => vec![*a],
+            // Узлы без входов (в контексте зависимостей графа)
+            NodeType::Input { .. }
+            | NodeType::Parameter { .. }
+            | NodeType::Literal(_)
+            | NodeType::External { .. } => vec![],
+            // Операции, которые еще не поддерживаются сортировкой
             _ => vec![],
         };
 
@@ -259,6 +277,7 @@ impl Gradients {
         Ok(())
     }
 
+    /// Выполняет топологическую сортировку части графа, необходимой для вычисления градиента.
     fn topological_sort(&self, start_node_id: NodeId) -> Result<Vec<NodeId>, AutogradError> {
         let mut sorted = Vec::new();
         let mut visited = HashSet::new();
@@ -266,6 +285,9 @@ impl Gradients {
         Ok(sorted)
     }
 
+    /// Накапливает градиент для заданного узла.
+    /// Если для узла уже есть градиент, новый добавляется к старому (через узел Add).
+    /// Если нет, то просто сохраняет новый.
     fn accumulate_grad(&mut self, node_id: NodeId, grad_to_add_id: NodeId) {
         if let Some(&existing_grad_id) = self.grad_map.get(&node_id) {
             let new_grad_id = self
@@ -277,6 +299,8 @@ impl Gradients {
         }
     }
 
+    /// Получает ID узла-градиента для данного узла.
+    /// Если градиент еще не существует, создает и возвращает узел-константу (тензор из нулей).
     fn get_or_create_zero_grad(&mut self, node_id: NodeId) -> NodeId {
         if let Some(&grad_id) = self.grad_map.get(&node_id) {
             return grad_id;
