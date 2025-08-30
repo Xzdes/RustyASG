@@ -365,10 +365,8 @@ fn op_matmul(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
         Value::Tensor(val) => val,
         _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
     };
-    
-    // Для нашего MLP примера достаточно обработать случай (N, M) @ (M, K)
-    // Где N - размер батча, M и K - размерности признаков.
-    // ndarray::dot() обрабатывает это корректно для 2D матриц.
+
+    // Случай 1: Матричное умножение (dot product)
     if a.ndim() >= 2 && b.ndim() == 2 {
         let a_mat = a.view().into_dimensionality::<Ix2>()
             .map_err(|e| RuntimeError::ShapeError(format!("LHS cannot be viewed as a 2D matrix: {}", e)))?;
@@ -385,9 +383,17 @@ fn op_matmul(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
 
         let result_data = a_mat.dot(&b_mat).into_dyn();
         Ok(Value::Tensor(result_data))
-    } else {
+    }
+    // Случай 2: Поэлементное умножение с трансляцией (скаляр * матрица или матрица * скаляр)
+    // Это как раз тот случай, который возникает в графе градиентов.
+    else if a.ndim() == 0 || b.ndim() == 0 {
+        let result_data = &a * &b; // ndarray's '*' handles broadcasting.
+        Ok(Value::Tensor(result_data))
+    }
+    // Если ни один из случаев не подошел
+    else {
         Err(RuntimeError::UnimplementedOperation(format!(
-            "Interpreter matmul is only implemented for N-D x 2D tensors. Got dimensions {} and {}",
+            "Interpreter matmul is not implemented for dimensions {} and {}",
             a.ndim(),
             b.ndim()
         )))
