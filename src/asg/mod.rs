@@ -97,6 +97,7 @@ pub enum NodeType {
     Add(NodeId, NodeId),
     Subtract(NodeId, NodeId),
     Multiply(NodeId, NodeId),
+    Divide(NodeId, NodeId),
     MatrixMultiply(NodeId, NodeId),
     GreaterThan(NodeId, NodeId), // Поэлементное сравнение >
 
@@ -104,10 +105,14 @@ pub enum NodeType {
     ReLU(NodeId),
     Sigmoid(NodeId),
     Log(NodeId),
+    Sqrt(NodeId),
     Power(NodeId, NodeId), // Второй аргумент - степень (может быть константой)
+    Softmax(NodeId), // Softmax по последней оси
 
     // --- Операции свертки/редукции ---
     Sum(NodeId), // Сумма всех элементов тензора
+    Mean(NodeId), // Среднее по последней оси
+    Variance(NodeId), // Дисперсия по последней оси
 
     // --- Операции трансформации ---
     Reshape(NodeId, NodeId), // Второй аргумент - тензор с новой формой

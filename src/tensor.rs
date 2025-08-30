@@ -13,7 +13,7 @@
 use crate::asg::{Asg, NodeId, NodeType, Value};
 use ndarray::ArrayD;
 use std::cell::RefCell;
-use std::ops::{Add, Mul, Sub};
+use std::ops::{Add, Div, Mul, Sub};
 use std::rc::Rc;
 
 /// Контекст, который владеет и управляет построением одного или нескольких ASG.
@@ -90,17 +90,6 @@ impl Tensor {
         }
     }
 
-    pub fn pow(&self, power: &Tensor) -> Self {
-        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
-            None,
-            NodeType::Power(self.node_id, power.node_id),
-        );
-        Self {
-            node_id,
-            context: Rc::clone(&self.context),
-        }
-    }
-
     /// Создает новый "параметр" в графе.
     /// Параметры - это обучаемые веса модели.
     pub fn new_parameter(context: &Rc<RefCell<GraphContext>>, name: &str) -> Self {
@@ -129,7 +118,19 @@ impl Tensor {
         }
     }
 
-    /// Добавляет в граф узел матричного умножения.
+    // --- Математические операции ---
+
+    pub fn pow(&self, power: &Tensor) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Power(self.node_id, power.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
     pub fn dot(&self, other: &Tensor) -> Self {
         let node_id = self.context.borrow_mut().main_graph_mut().add_node(
             None,
@@ -141,7 +142,19 @@ impl Tensor {
         }
     }
 
-    /// Добавляет в граф узел активации ReLU.
+    pub fn sqrt(&self) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Sqrt(self.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    // --- Функции активации ---
+
     pub fn relu(&self) -> Self {
         let node_id = self
             .context
@@ -154,7 +167,30 @@ impl Tensor {
         }
     }
 
-    /// Добавляет в граф узел для суммирования всех элементов тензора.
+    pub fn sigmoid(&self) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Sigmoid(self.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+    
+    pub fn softmax(&self) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Softmax(self.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    // --- Операции редукции ---
+
     pub fn sum(&self) -> Self {
         let node_id = self
             .context
@@ -166,13 +202,63 @@ impl Tensor {
             context: Rc::clone(&self.context),
         }
     }
+
+    pub fn mean(&self) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Mean(self.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    pub fn variance(&self) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Variance(self.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+    
+    // --- Операции трансформации ---
+
+    pub fn reshape(&self, shape: Vec<i64>) -> Self {
+        let shape_data = ArrayD::from_shape_vec(ndarray::IxDyn(&[shape.len()]), shape).unwrap();
+        let shape_node = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Literal(Value::Tensor(shape_data.mapv(|x| x as f32))),
+        );
+        let reshape_node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Reshape(self.node_id, shape_node),
+        );
+        Self {
+            node_id: reshape_node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    pub fn transpose(&self, axis1: usize, axis2: usize) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Transpose(self.node_id, axis1, axis2),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
 }
 
 // Реализация операторов для удобного синтаксиса `a + b`.
 
 impl Add<&Tensor> for &Tensor {
     type Output = Tensor;
-
     fn add(self, rhs: &Tensor) -> Self::Output {
         let node_id = self.context.borrow_mut().main_graph_mut().add_node(
             None,
@@ -187,7 +273,6 @@ impl Add<&Tensor> for &Tensor {
 
 impl Sub<&Tensor> for &Tensor {
     type Output = Tensor;
-
     fn sub(self, rhs: &Tensor) -> Self::Output {
         let node_id = self.context.borrow_mut().main_graph_mut().add_node(
             None,
@@ -202,11 +287,24 @@ impl Sub<&Tensor> for &Tensor {
 
 impl Mul<&Tensor> for &Tensor {
     type Output = Tensor;
-
     fn mul(self, rhs: &Tensor) -> Self::Output {
         let node_id = self.context.borrow_mut().main_graph_mut().add_node(
             None,
             NodeType::Multiply(self.node_id, rhs.node_id),
+        );
+        Tensor {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+}
+
+impl Div<&Tensor> for &Tensor {
+    type Output = Tensor;
+    fn div(self, rhs: &Tensor) -> Self::Output {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Divide(self.node_id, rhs.node_id),
         );
         Tensor {
             node_id,
