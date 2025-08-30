@@ -8,7 +8,7 @@
 //! и вернуть конечный результат.
 
 use crate::asg::{Asg, AsgId, NodeId, NodeType, Value};
-use ndarray::{Axis, Ix2, Zip};
+use ndarray::{s, Axis, Ix2, Zip};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -192,10 +192,8 @@ fn op_reshape(source: Value, shape_provider: Value) -> Result<Value, RuntimeErro
     match (source, shape_provider) { 
         (Value::Tensor(s), Value::Tensor(p)) => { 
             let shape: Vec<usize> = p.iter().map(|&x| x as usize).collect();
-            // --- ИСПРАВЛЕНИЕ ПАНИКИ ---
-            // Создаем новый массив с нужной формой, гарантируя непрерывность в памяти.
-            let reshaped = s.to_shape(shape).map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
-            Ok(Value::Tensor(reshaped.to_owned()))
+            let reshaped = s.into_shape(shape).map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+            Ok(Value::Tensor(reshaped)) 
         }, 
         _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) 
     }
@@ -206,17 +204,42 @@ fn op_greater_than(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
 fn op_softmax(operand: Value) -> Result<Value, RuntimeError> {
     match operand { Value::Tensor(a) => { let mut result = a.clone(); let last_axis = Axis(a.ndim() - 1); result.axis_iter_mut(last_axis).for_each(|mut row| { let max_val = row.iter().fold(f32::NEG_INFINITY, |max, &val| max.max(val)); row.mapv_inplace(|x| (x - max_val).exp()); let sum = row.sum(); row.mapv_inplace(|x| x / sum); }); Ok(Value::Tensor(result)) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
 }
+
 fn op_matmul(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     let a = match lhs { Value::Tensor(val) => val, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) };
     let b = match rhs { Value::Tensor(val) => val, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) };
-    if a.ndim() >= 2 && b.ndim() == 2 {
+
+    // Case 1: Batched Matrix Multiply (BMM) for Attention, e.g., 4D x 4D
+    if a.ndim() == 4 && b.ndim() == 4 {
+        // Expected shapes: a=[batch, heads, seq, dim], b=[batch, heads, dim, seq]
+        let batch_size = a.shape()[0];
+        let num_heads = a.shape()[1];
+        let seq_len = a.shape()[2];
+        let out_seq_len = b.shape()[3];
+
+        let mut out = ndarray::ArrayD::zeros(ndarray::IxDyn(&[batch_size, num_heads, seq_len, out_seq_len]));
+
+        for i in 0..batch_size {
+            for j in 0..num_heads {
+                let a_mat = a.slice(s![i, j, .., ..]).into_dimensionality::<Ix2>().unwrap();
+                let b_mat = b.slice(s![i, j, .., ..]).into_dimensionality::<Ix2>().unwrap();
+                let mut out_slice = out.slice_mut(s![i, j, .., ..]);
+                out_slice.assign(&a_mat.dot(&b_mat));
+            }
+        }
+        return Ok(Value::Tensor(out));
+    }
+    // Case 2: Standard Matrix Multiply (e.g., MLP layers), handles 2D x 2D, 3D x 2D etc.
+    else if a.ndim() >= 2 && b.ndim() == 2 {
         let a_mat = a.view().into_dimensionality::<Ix2>().unwrap();
         let b_mat = b.view().into_dimensionality::<Ix2>().unwrap();
         if a_mat.shape()[1] != b_mat.shape()[0] { return Err(RuntimeError::ShapeError(format!("Incompatible shapes for matmul: {:?} and {:?}", a.shape(), b.shape()))); }
-        Ok(Value::Tensor(a_mat.dot(&b_mat).into_dyn()))
-    } else if a.ndim() == 0 || b.ndim() == 0 {
-        Ok(Value::Tensor(&a * &b))
-    } else {
-        Err(RuntimeError::UnimplementedOperation(format!("Matmul for dims {} and {}", a.ndim(), b.ndim())))
+        return Ok(Value::Tensor(a_mat.dot(&b_mat).into_dyn()));
     }
+    // Case 3: Broadcasting multiply (from gradients)
+    else if a.ndim() == 0 || b.ndim() == 0 {
+        return Ok(Value::Tensor(&a * &b));
+    }
+    
+    Err(RuntimeError::UnimplementedOperation(format!("Matmul for dims {} and {}", a.ndim(), b.ndim())))
 }

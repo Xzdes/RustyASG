@@ -85,11 +85,10 @@ impl MultiHeadAttention {
 
     /// Вспомогательная функция для слияния голов.
     /// Исходная форма: [batch_size, num_heads, seq_len, head_dim]
-    /// Выходная форма: [batch_size, seq_len, embed_dim]
+    /// Выходная форма: [batch_size * seq_len, embed_dim]
     fn combine_heads(&self, x: &Tensor, batch_size: i64, seq_len: i64) -> Tensor {
         x.transpose(1, 2).reshape(vec![
-            batch_size,
-            seq_len,
+            batch_size * seq_len,
             self.embed_dim as i64,
         ])
     }
@@ -99,8 +98,6 @@ impl Module for MultiHeadAttention {
     fn forward(&self, inputs: &Tensor) -> Tensor {
         // В графовой модели мы не знаем конкретных размеров батча и последовательности.
         // Для нашего примера с batch_size=1 и seq_len=1 это будет работать.
-        // В более продвинутой системе здесь нужны были бы символьные операции для
-        // получения размеров.
         let batch_size = 1;
         let seq_len = 1;
 

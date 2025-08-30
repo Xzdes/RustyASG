@@ -12,7 +12,7 @@ mod tensor;
 use crate::asg::Value;
 use crate::autograd::Gradients;
 use crate::losses::mse_loss;
-use crate::nn::{Linear, Module, TransformerBlock};
+use crate::nn::{Module, TransformerBlock};
 use crate::optimizers::{Optimizer, Sgd};
 use crate::runtime::interpreter::Interpreter;
 use crate::tensor::{GraphContext, Tensor};
