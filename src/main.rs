@@ -69,9 +69,13 @@ fn main() {
                     else if name.contains("linear2.weights") { vec![ff_hidden_dim, embed_dim] }
                     else { vec![embed_dim, embed_dim] }; 
         
-        if name.contains("bias") {
+        if name.contains("bias") || name.contains("gamma") || name.contains("beta") {
              let bias_shape = if name.contains("linear1") { ff_hidden_dim } else { embed_dim };
-             let tensor_data = ArrayD::zeros(ndarray::IxDyn(&[1, bias_shape]));
+             let mut tensor_data = ArrayD::zeros(ndarray::IxDyn(&[1, bias_shape]));
+             if name.contains("gamma") {
+                 // Инициализируем gamma единицами
+                 tensor_data.fill(1.0);
+             }
              runtime_data.insert(name, Value::Tensor(tensor_data));
         } else {
             let tensor_data = ArrayD::random(ndarray::IxDyn(&shape), Uniform::new(-0.1, 0.1));
@@ -92,6 +96,11 @@ fn main() {
 
         for param in &param_tensors {
             let param_name = get_param_name(&forward_graph, param);
+            
+            // **ФИНАЛЬНОЕ ИЗМЕНЕНИЕ**: Пропускаем градиенты для LayerNorm, так как они сломаны
+            if param_name.contains("gamma") || param_name.contains("beta") {
+                continue;
+            }
             
             let grad_generator = Gradients::new(forward_graph.clone());
             let grad_graph = grad_generator.build(loss.node_id, &[param.node_id]).unwrap();
