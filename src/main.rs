@@ -35,7 +35,7 @@ fn get_param_name(graph: &asg::Asg, tensor: &Tensor) -> String {
 }
 
 fn main() {
-    println!("--- Демонстрация полного цикла обучения RustyGradients ---");
+    println!("--- Демонстрация полного цикла обучения RustyASG> ---");
 
     let context = Rc::new(RefCell::new(GraphContext::new()));
     let model_input = Tensor::new_input(&context, "input_data");
