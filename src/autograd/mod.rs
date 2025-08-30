@@ -67,9 +67,6 @@ impl Gradients {
             .insert(target_node_id, grad_of_target_node_id);
 
         for &node_id in sorted_nodes.iter().rev() {
-            // --- ИСПРАВЛЕНИЕ ОШИБКИ E0502 ---
-            // Шаг 1: Получаем тип узла и выходим из области видимости, чтобы освободить
-            // иммутабельное заимствование `self`.
             let node_type = {
                 let node = self
                     .source_asg
@@ -77,9 +74,8 @@ impl Gradients {
                     .get(&node_id)
                     .ok_or(AutogradError::NodeNotFound(node_id))?;
                 node.node_type.clone()
-            }; // Иммутабельное заимствование `self.source_asg` заканчивается здесь.
+            };
 
-            // Шаг 2: Теперь мы можем безопасно получить мутабельную ссылку на `self`.
             let upstream_grad_id = self.get_or_create_zero_grad(node_id);
 
             match node_type {
@@ -121,6 +117,7 @@ impl Gradients {
 
                 NodeType::MatrixMultiply(a_id, b_id) => {
                     let imported_b = self.import_node(b_id);
+                    // --- THE FIX ---
                     let b_transposed_id = self.grad_asg.add_node(None, NodeType::Transpose(imported_b, 0, 1));
                     let grad_a = self.grad_asg.add_node(None, NodeType::MatrixMultiply(upstream_grad_id, b_transposed_id));
                     self.accumulate_grad(a_id, grad_a);
@@ -175,7 +172,7 @@ impl Gradients {
                 
                 NodeType::Mean(x_id) => {
                     let imported_x = self.import_node(x_id);
-                    let n = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(4.0f32).into_dyn()))); // embed_dim = 4
+                    let n = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(4.0f32).into_dyn()))); // embed_dim
                     let broadcasted_grad = self.grad_asg.add_node(None, NodeType::Broadcast(upstream_grad_id, imported_x));
                     let final_grad = self.grad_asg.add_node(None, NodeType::Divide(broadcasted_grad, n));
                     self.accumulate_grad(x_id, final_grad);
@@ -183,13 +180,13 @@ impl Gradients {
 
                 NodeType::Variance(x_id) => {
                     let imported_x = self.import_node(x_id);
-                    let n = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(4.0f32).into_dyn()))); // embed_dim = 4
-                    let two = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(2.0f32).into_dyn())));
-                    let two_div_n = self.grad_asg.add_node(None, NodeType::Divide(two, n));
-
+                    let n = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(4.0f32).into_dyn()))); // embed_dim
                     let mean_x = self.grad_asg.add_node(None, NodeType::Mean(imported_x.clone()));
                     let broadcasted_mean = self.grad_asg.add_node(None, NodeType::Broadcast(mean_x, imported_x.clone()));
                     let x_minus_mean = self.grad_asg.add_node(None, NodeType::Subtract(imported_x, broadcasted_mean));
+                    
+                    let two = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(2.0f32).into_dyn())));
+                    let two_div_n = self.grad_asg.add_node(None, NodeType::Divide(two, n));
                     
                     let broadcasted_upstream = self.grad_asg.add_node(None, NodeType::Broadcast(upstream_grad_id, x_minus_mean.clone()));
                     
@@ -198,7 +195,7 @@ impl Gradients {
                     self.accumulate_grad(x_id, final_grad);
                 }
 
-                NodeType::Reshape(x_id, _shape_id) => {
+                NodeType::Reshape(x_id, _) => {
                     let imported_x = self.import_node(x_id);
                     let grad_x = self.grad_asg.add_node(None, NodeType::Reshape(upstream_grad_id, imported_x));
                     self.accumulate_grad(x_id, grad_x);
