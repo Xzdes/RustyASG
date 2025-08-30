@@ -10,7 +10,7 @@
 //! `GraphContext` - это центральный объект, который владеет и управляет
 //! построением ASG.
 
-use crate::asg::{Asg, AsgId, NodeId, NodeType, Value};
+use crate::asg::{Asg, NodeId, NodeType, Value};
 use ndarray::ArrayD;
 use std::cell::RefCell;
 use std::ops::{Add, Mul, Sub};
@@ -22,10 +22,9 @@ use std::rc::Rc;
 /// разделять между множеством `Tensor` дескрипторов.
 #[derive(Debug, Clone)]
 pub struct GraphContext {
-    // TODO: В будущем здесь будет коллекция графов для поддержки вложенности.
     // Пока что для простоты работаем с одним главным графом.
+    // В будущем здесь может быть коллекция графов для поддержки вложенности.
     main_graph: Asg,
-    next_asg_id: AsgId,
 }
 
 impl GraphContext {
@@ -33,7 +32,6 @@ impl GraphContext {
     pub fn new() -> Self {
         Self {
             main_graph: Asg::new(0, Some("main".to_string())),
-            next_asg_id: 1,
         }
     }
 
@@ -83,8 +81,6 @@ impl Tensor {
             },
         );
 
-        
-
         // Регистрируем этот узел как один из входов графа.
         graph.inputs.push(node_id);
 
@@ -92,20 +88,18 @@ impl Tensor {
             node_id,
             context: Rc::clone(context),
         }
-
-        
     }
 
     pub fn pow(&self, power: &Tensor) -> Self {
-    let node_id = self.context.borrow_mut().main_graph_mut().add_node(
-        None,
-        NodeType::Power(self.node_id, power.node_id),
-    );
-    Self {
-        node_id,
-        context: Rc::clone(&self.context),
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Power(self.node_id, power.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
     }
-}
 
     /// Создает новый "параметр" в графе.
     /// Параметры - это обучаемые веса модели.
@@ -172,8 +166,6 @@ impl Tensor {
             context: Rc::clone(&self.context),
         }
     }
-
-    // TODO: Добавить остальные методы (sigmoid, log, reshape, etc.) по аналогии.
 }
 
 // Реализация операторов для удобного синтаксиса `a + b`.
@@ -191,7 +183,6 @@ impl Add<&Tensor> for &Tensor {
             context: Rc::clone(&self.context),
         }
     }
-    
 }
 
 impl Sub<&Tensor> for &Tensor {
@@ -223,4 +214,3 @@ impl Mul<&Tensor> for &Tensor {
         }
     }
 }
-
