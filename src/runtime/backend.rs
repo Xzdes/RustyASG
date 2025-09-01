@@ -24,6 +24,10 @@ pub enum RuntimeError {
     UnimplementedOperation(String),
 }
 
+/// Кэш для хранения уже вычисленных значений узлов.
+/// Ключ - это (AsgId, NodeId).
+pub type Memo<T> = HashMap<(AsgId, NodeId), T>;
+
 /// Трейт, определяющий общий интерфейс для исполнительной среды (бэкенда).
 ///
 /// Любая структура, реализующая этот трейт, может взять ASG и данные
@@ -31,7 +35,7 @@ pub enum RuntimeError {
 pub trait Backend {
     /// Тип, представляющий данные, специфичные для устройства (CPU или GPU).
     /// Например, для GPU это может быть обертка над wgpu::Buffer.
-    type DeviceData;
+    type DeviceData: std::fmt::Debug;
 
     /// Подготавливает данные для выполнения: выделяет память на устройстве
     /// и копирует в нее данные с CPU.
@@ -40,19 +44,22 @@ pub trait Backend {
         data: &HashMap<String, Value>,
     ) -> Result<HashMap<String, Self::DeviceData>, RuntimeError>;
 
-    /// Выполняет граф, используя подготовленные данные.
+    /// Выполняет граф, используя и обновляя кэш вычислений.
     ///
     /// # Аргументы
     /// * `main_asg` - Основной граф для выполнения.
-    /// * `inputs` - HashMap с данными, уже загруженными на устройство.
-    /// * `linked_graphs` - Ссылки на другие графы, которые могут понадобиться
-    ///   (например, граф прямого прохода при выполнении графа градиентов).
+    /// * `initial_memo` - Кэш с начальными данными (входы, параметры) и, возможно,
+    ///   результатами предыдущих вычислений (для связанных графов).
+    ///
+    /// # Возвращает
+    /// Кортеж, содержащий:
+    /// 1. Вектор с выходными данными графа.
+    /// 2. Финальное состояние кэша `Memo` со всеми промежуточными результатами.
     fn run(
         &self,
         main_asg: &Asg,
-        inputs: &HashMap<String, Self::DeviceData>,
-        linked_graphs: &[&Asg],
-    ) -> Result<Vec<Self::DeviceData>, RuntimeError>;
+        initial_memo: Memo<Self::DeviceData>,
+    ) -> Result<(Vec<Self::DeviceData>, Memo<Self::DeviceData>), RuntimeError>;
 
     /// Забирает результат с устройства обратно в виде CPU-значения (`Value`).
     fn retrieve_data(&self, device_data: &[Self::DeviceData]) -> Result<Vec<Value>, RuntimeError>;

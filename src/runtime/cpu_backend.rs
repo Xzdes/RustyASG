@@ -3,7 +3,7 @@
 //! Этот бэкенд обходит граф вычислений (ASG) и для каждого узла
 //! выполняет соответствующую операцию с помощью `ndarray`.
 
-use super::backend::{Backend, RuntimeError};
+use super::backend::{Backend, Memo, RuntimeError};
 use crate::asg::{Asg, AsgId, NodeId, NodeType, Value};
 use ndarray::{s, Axis, Ix2, Zip};
 use std::collections::HashMap;
@@ -12,28 +12,20 @@ use std::collections::HashMap;
 struct ExecutionContext<'a> {
     /// Хранилище всех графов, участвующих в вычислении.
     graphs: HashMap<AsgId, &'a Asg>,
-    /// Хранилище для входных данных и обучаемых параметров.
-    inputs: &'a HashMap<String, Value>,
     /// Глобальный кэш для уже вычисленных значений узлов.
     /// Ключ - это (AsgId, NodeId).
-    memo: HashMap<(AsgId, NodeId), Value>,
+    memo: Memo<Value>,
 }
 
 impl<'a> ExecutionContext<'a> {
     /// Создает новый контекст выполнения.
-    fn new(main_asg: &'a Asg, inputs: &'a HashMap<String, Value>) -> Self {
+    fn new(main_asg: &'a Asg, initial_memo: Memo<Value>) -> Self {
         let mut graphs = HashMap::new();
         graphs.insert(main_asg.id, main_asg);
         Self {
             graphs,
-            inputs,
-            memo: HashMap::new(),
+            memo: initial_memo,
         }
-    }
-
-    /// Добавляет связанный граф в контекст (например, граф прямого прохода).
-    pub fn add_graph(&mut self, asg: &'a Asg) {
-        self.graphs.insert(asg.id, asg);
     }
 
     /// Главная функция, которая рекурсивно вычисляет значение для заданного узла.
@@ -52,10 +44,20 @@ impl<'a> ExecutionContext<'a> {
             .ok_or(RuntimeError::NodeNotFound(node_id, asg_id))?;
 
         let result = match &node.node_type {
-            NodeType::Input { name } => self.inputs.get(name).cloned().ok_or_else(|| RuntimeError::MissingInput(name.clone(), node_id)),
-            NodeType::Parameter { name } => self.inputs.get(name).cloned().ok_or_else(|| RuntimeError::MissingParameter(name.clone(), node_id)),
+            NodeType::Input { .. } | NodeType::Parameter { .. } => {
+                 // Входы и параметры должны быть уже в memo к моменту вызова `run`
+                 return Err(RuntimeError::MissingInput(
+                    node.name.clone().unwrap_or_default(),
+                    node_id
+                ));
+            }
             NodeType::Literal(value) => Ok(value.clone()),
-            NodeType::External { source_asg_id, source_node_id, .. } => self.evaluate_node(*source_asg_id, *source_node_id),
+            NodeType::External { source_asg_id, source_node_id, .. } => {
+                // Пытаемся получить значение из кэша. Если его там нет, это ошибка.
+                self.memo.get(&(*source_asg_id, *source_node_id))
+                    .cloned()
+                    .ok_or(RuntimeError::NodeNotFound(*source_node_id, *source_asg_id))
+            },
 
             // Бинарные операции
             NodeType::Add(l, r) | NodeType::Subtract(l, r) | NodeType::Multiply(l, r) | NodeType::Divide(l, r) |
@@ -132,21 +134,28 @@ impl Backend for CpuBackend {
     fn run(
         &self,
         main_asg: &Asg,
-        inputs: &HashMap<String, Self::DeviceData>,
-        linked_graphs: &[&Asg],
-    ) -> Result<Vec<Self::DeviceData>, RuntimeError> {
-        let mut context = ExecutionContext::new(main_asg, inputs);
-        for g in linked_graphs {
-            context.add_graph(g);
+        initial_memo: Memo<Self::DeviceData>,
+    ) -> Result<(Vec<Self::DeviceData>, Memo<Self::DeviceData>), RuntimeError> {
+        let sorted_nodes = crate::analysis::shape_inference::ShapeInference::topological_sort(main_asg)
+            .map_err(|e| RuntimeError::ShapeError(format!("Topological sort failed: {:?}", e)))?;
+
+        let mut context = ExecutionContext::new(main_asg, initial_memo);
+
+        // Последовательно вычисляем каждый узел
+        for node_id in sorted_nodes {
+            context.evaluate_node(main_asg.id, node_id)?;
         }
         
-        // Вычисляем каждый выходной узел графа
+        // Собираем результаты
         let mut results = Vec::new();
         for output_node_id in &main_asg.outputs {
-            let result = context.evaluate_node(main_asg.id, *output_node_id)?;
+            let result = context.memo.get(&(main_asg.id, *output_node_id))
+                .ok_or(RuntimeError::NodeNotFound(*output_node_id, main_asg.id))?
+                .clone();
             results.push(result);
         }
-        Ok(results)
+        // Возвращаем результаты и итоговый кэш
+        Ok((results, context.memo))
     }
 
     fn retrieve_data(&self, device_data: &[Self::DeviceData]) -> Result<Vec<Value>, RuntimeError> {
@@ -156,93 +165,40 @@ impl Backend for CpuBackend {
 }
 
 
-// --- Реализации операций (остаются без изменений) ---
+// --- Реализации операций ---
 
-fn op_add(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
-    match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a + &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_subtract(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
-    match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a - &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_multiply(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
-    match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a * &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_divide(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
-    match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a / &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_relu(operand: Value) -> Result<Value, RuntimeError> {
-    match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|val| val.max(0.0)))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_sigmoid(operand: Value) -> Result<Value, RuntimeError> {
-    match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| 1.0 / (1.0 + (-x).exp())))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_sum(operand: Value) -> Result<Value, RuntimeError> {
-    match operand { Value::Tensor(a) => Ok(Value::Tensor(ndarray::arr0(a.sum()).into_dyn())), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_sqrt(operand: Value) -> Result<Value, RuntimeError> {
-    match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.sqrt()))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_mean(operand: Value) -> Result<Value, RuntimeError> {
-    match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mean_axis(Axis(a.ndim() - 1)).unwrap().into_dyn())), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_variance(operand: Value) -> Result<Value, RuntimeError> {
-    match operand { Value::Tensor(a) => Ok(Value::Tensor(a.var_axis(Axis(a.ndim() - 1), 0.0).into_dyn())), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_power(base: Value, power: Value) -> Result<Value, RuntimeError> {
-    match (base, power) { (Value::Tensor(a), Value::Tensor(b)) if b.ndim() == 0 => Ok(Value::Tensor(a.mapv(|val| val.powf(*b.first().unwrap())))), _ => Err(RuntimeError::TypeError { expected: "Tensor and Scalar Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_transpose(operand: Value, axis1: usize, axis2: usize) -> Result<Value, RuntimeError> {
-    match operand { Value::Tensor(a) => { let mut axes: Vec<_> = (0..a.ndim()).collect(); axes.swap(axis1, axis2); Ok(Value::Tensor(a.permuted_axes(axes))) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_broadcast(source: Value, target: Value) -> Result<Value, RuntimeError> {
-    match (source, target) { (Value::Tensor(s), Value::Tensor(t)) => Ok(Value::Tensor(ndarray::ArrayD::from_elem(t.shape(), *s.first().unwrap()))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_reshape(source: Value, shape_provider: Value) -> Result<Value, RuntimeError> {
-    match (source, shape_provider) { 
-        (Value::Tensor(s), Value::Tensor(p)) => { 
-            let shape: Vec<usize> = p.iter().map(|&x| x as usize).collect();
-            let reshaped = s.to_shape(shape.as_slice()).map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
-            Ok(Value::Tensor(reshaped.to_owned())) 
-        }, 
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) 
-    }
-}
-fn op_greater_than(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
-    match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => { let mut r = a.clone(); if b.ndim() == 0 { r.mapv_inplace(|v| if v > *b.first().unwrap() { 1.0 } else { 0.0 }); } else { Zip::from(&mut r).and(&a).and(&b).for_each(|res, &va, &vb| *res = if va > vb { 1.0 } else { 0.0 }); } Ok(Value::Tensor(r)) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-fn op_softmax(operand: Value) -> Result<Value, RuntimeError> {
-    match operand { Value::Tensor(a) => { let mut result = a.clone(); let last_axis = Axis(a.ndim() - 1); result.axis_iter_mut(last_axis).for_each(|mut row| { let max_val = row.iter().fold(f32::NEG_INFINITY, |max, &val| max.max(val)); row.mapv_inplace(|x| (x - max_val).exp()); let sum = row.sum(); row.mapv_inplace(|x| x / sum); }); Ok(Value::Tensor(result)) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }
-}
-
+fn op_add(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a + &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_subtract(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a - &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_multiply(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a * &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_divide(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a / &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_relu(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|val| val.max(0.0)))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_sigmoid(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| 1.0 / (1.0 + (-x).exp())))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_sum(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(ndarray::arr0(a.sum()).into_dyn())), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_sqrt(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.sqrt()))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_mean(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mean_axis(Axis(a.ndim() - 1)).unwrap().into_dyn())), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_variance(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.var_axis(Axis(a.ndim() - 1), 0.0).into_dyn())), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_power(base: Value, power: Value) -> Result<Value, RuntimeError> { match (base, power) { (Value::Tensor(a), Value::Tensor(b)) if b.ndim() == 0 => Ok(Value::Tensor(a.mapv(|val| val.powf(*b.first().unwrap())))), _ => Err(RuntimeError::TypeError { expected: "Tensor and Scalar Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_transpose(operand: Value, axis1: usize, axis2: usize) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => { let mut axes: Vec<_> = (0..a.ndim()).collect(); axes.swap(axis1, axis2); Ok(Value::Tensor(a.permuted_axes(axes))) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_broadcast(source: Value, target: Value) -> Result<Value, RuntimeError> { match (source, target) { (Value::Tensor(s), Value::Tensor(t)) => Ok(Value::Tensor(ndarray::ArrayD::from_elem(t.shape(), *s.first().unwrap()))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_reshape(source: Value, shape_provider: Value) -> Result<Value, RuntimeError> { match (source, shape_provider) { (Value::Tensor(s), Value::Tensor(p)) => { let shape: Vec<usize> = p.iter().map(|&x| x as usize).collect(); let reshaped = s.to_shape(shape.as_slice()).map_err(|e| RuntimeError::ShapeError(e.to_string()))?; Ok(Value::Tensor(reshaped.to_owned())) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_greater_than(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => { let mut r = a.clone(); if b.ndim() == 0 { r.mapv_inplace(|v| if v > *b.first().unwrap() { 1.0 } else { 0.0 }); } else { Zip::from(&mut r).and(&a).and(&b).for_each(|res, &va, &vb| *res = if va > vb { 1.0 } else { 0.0 }); } Ok(Value::Tensor(r)) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_softmax(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => { let mut result = a.clone(); let last_axis = Axis(a.ndim() - 1); result.axis_iter_mut(last_axis).for_each(|mut row| { let max_val = row.iter().fold(f32::NEG_INFINITY, |max, &val| max.max(val)); row.mapv_inplace(|x| (x - max_val).exp()); let sum = row.sum(); row.mapv_inplace(|x| x / sum); }); Ok(Value::Tensor(result)) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
 fn op_matmul(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     let a = match lhs { Value::Tensor(val) => val, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) };
     let b = match rhs { Value::Tensor(val) => val, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) };
-
     if a.ndim() == 4 && b.ndim() == 4 {
-        let batch_size = a.shape()[0];
-        let num_heads = a.shape()[1];
-        let seq_len_a = a.shape()[2];
-        let seq_len_b = b.shape()[3];
-        let mut out = ndarray::ArrayD::zeros(ndarray::IxDyn(&[batch_size, num_heads, seq_len_a, seq_len_b]));
-        for i in 0..batch_size {
-            for j in 0..num_heads {
-                let a_mat = a.slice(s![i, j, .., ..]).into_dimensionality::<Ix2>().unwrap();
-                let b_mat = b.slice(s![i, j, .., ..]).into_dimensionality::<Ix2>().unwrap();
-                let mut out_slice = out.slice_mut(s![i, j, .., ..]);
-                out_slice.assign(&a_mat.dot(&b_mat));
-            }
-        }
+        let (b0,b1,m,_,n) = (a.shape()[0],a.shape()[1],a.shape()[2],a.shape()[3],b.shape()[3]);
+        let mut out = ndarray::ArrayD::zeros(ndarray::IxDyn(&[b0,b1,m,n]));
+        for i in 0..b0 { for j in 0..b1 {
+            let a_mat=a.slice(s![i,j,..,..]).into_dimensionality::<Ix2>().unwrap();
+            let b_mat=b.slice(s![i,j,..,..]).into_dimensionality::<Ix2>().unwrap();
+            out.slice_mut(s![i,j,..,..]).assign(&a_mat.dot(&b_mat));
+        }}
         return Ok(Value::Tensor(out));
-    }
-    else if a.ndim() >= 2 && b.ndim() == 2 {
-        let a_mat = a.view().into_dimensionality::<Ix2>().unwrap();
-        let b_mat = b.view().into_dimensionality::<Ix2>().unwrap();
-        if a_mat.shape()[1] != b_mat.shape()[0] { return Err(RuntimeError::ShapeError(format!("Incompatible shapes for matmul: {:?} and {:?}", a.shape(), b.shape()))); }
+    } else if a.ndim() >= 2 && b.ndim() == 2 {
+        let a_mat=a.view().into_dimensionality::<Ix2>().unwrap();let b_mat=b.view().into_dimensionality::<Ix2>().unwrap();
+        if a_mat.shape()[1]!=b_mat.shape()[0]{return Err(RuntimeError::ShapeError(format!("Incompatible matmul shapes: {:?} and {:?}", a.shape(), b.shape())));}
         return Ok(Value::Tensor(a_mat.dot(&b_mat).into_dyn()));
-    }
-    else if a.ndim() == 0 || b.ndim() == 0 {
-        return Ok(Value::Tensor(&a * &b));
-    }
-    
+    } else if a.ndim() == 0 || b.ndim() == 0 { return Ok(Value::Tensor(&a * &b)); }
     Err(RuntimeError::UnimplementedOperation(format!("Matmul for dims {} and {}", a.ndim(), b.ndim())))
 }

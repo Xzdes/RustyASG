@@ -11,12 +11,12 @@ mod runtime;
 mod tensor;
 
 use crate::analysis::shape_inference::ShapeInference;
-use crate::asg::{DType, Shape, Value};
+use crate::asg::{DType, NodeType, Shape, Value}; // <-- ДОБАВЛЕНО NodeType ЗДЕСЬ
 use crate::autograd::Gradients;
 use crate::losses::mse_loss;
 use crate::nn::{Module, TransformerBlock};
 use crate::optimizers::{Optimizer, Sgd};
-use crate::runtime::backend::Backend;
+use crate::runtime::backend::{Backend, Memo};
 use crate::runtime::cpu_backend::CpuBackend;
 use crate::runtime::wgpu_backend::WgpuBackend;
 use crate::tensor::{GraphContext, Tensor};
@@ -86,7 +86,6 @@ fn main() {
     
     // --- 4. Анализ Форм для Графа Градиентов ---
     let mut grad_initial_shapes = HashMap::new();
-    // Формы для External узлов графа градиентов - это формы соответствующих узлов из прямого графа
     for node in forward_graph.nodes.values() {
         if let Some(shape) = &node.shape {
             let external_node_name = format!("external_{}_{}", forward_graph.id, node.id);
@@ -98,10 +97,8 @@ fn main() {
 
     // --- 5. Инициализация Данных и Оптимизатора ---
     let mut runtime_data = HashMap::new();
-    // Инициализируем входы
     runtime_data.insert("input_data".to_string(), Value::Tensor(ArrayD::random(ndarray::IxDyn(&[1, embed_dim]), Uniform::new(-1.0, 1.0))));
     runtime_data.insert("true_output".to_string(), Value::Tensor(ArrayD::from_elem(ndarray::IxDyn(&[1, embed_dim]), 0.5)));
-    // Инициализируем параметры
     for (name, (shape, _)) in initial_shapes.iter() {
         if name.contains("input") || name.contains("output") { continue; }
         if name.contains("gamma") {
@@ -148,20 +145,32 @@ fn run_training_loop<B: Backend>(
     for epoch in 0..15 {
         // 1. Загружаем данные на устройство (GPU или "CPU")
         let device_data = backend.load_data(&runtime_data).unwrap();
+        
+        // Преобразуем device_data (String -> Data) в initial_memo ((AsgId, NodeId) -> Data)
+        let mut initial_memo: Memo<B::DeviceData> = HashMap::new();
+        for (name, data) in device_data {
+            if let Some(node_id) = forward_graph.nodes.values()
+                .find(|n| match &n.node_type {
+                    NodeType::Input{name: n_name} | NodeType::Parameter{name: n_name} => n_name == &name,
+                    _ => false
+                }).map(|n| n.id) {
+                initial_memo.insert((forward_graph.id, node_id), data);
+            }
+        }
 
-        // 2. Выполняем прямой проход
-        let loss_device_vec = backend.run(&forward_graph, &device_data, &[]).unwrap();
+        // 2. Выполняем прямой проход, ПОЛУЧАЕМ КЭШ
+        let (loss_device_vec, forward_memo) = backend.run(&forward_graph, initial_memo).unwrap();
         let loss_value_vec = backend.retrieve_data(&loss_device_vec).unwrap();
         let loss_value = loss_value_vec.first().unwrap();
 
-        // 3. Выполняем обратный проход
-        let grad_device_vec = backend.run(&grad_graph, &device_data, &[&forward_graph]).unwrap();
+        // 3. Выполняем обратный проход, ПЕРЕДАЕМ КЭШ от прямого прохода
+        let (grad_device_vec, _grad_memo) = backend.run(&grad_graph, forward_memo).unwrap();
         let grad_value_vec = backend.retrieve_data(&grad_device_vec).unwrap();
-
+        
         // 4. Собираем градиенты в HashMap
         let mut computed_grads = HashMap::new();
         for (name, value) in param_names.iter().zip(grad_value_vec.into_iter()) {
-            // Пропускаем обновление параметров LayerNorm, так как их градиенты еще не реализованы
+            // Пропускаем обновление параметров LayerNorm, так как их градиенты еще не реализованы корректно
             if name.contains("gamma") || name.contains("beta") { continue; }
             computed_grads.insert(name.clone(), value);
         }
