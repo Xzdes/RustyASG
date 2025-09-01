@@ -1,3 +1,5 @@
+// --- Файл: src/main.rs (финальная рабочая версия для замены) ---
+
 //! Главный исполняемый файл, демонстрирующий полный цикл обучения
 //! с использованием графовой архитектуры и выбором бэкенда (CPU/GPU).
 
@@ -11,7 +13,7 @@ mod runtime;
 mod tensor;
 
 use crate::analysis::shape_inference::ShapeInference;
-use crate::asg::{DType, NodeType, Shape, Value}; // <-- ДОБАВЛЕНО NodeType ЗДЕСЬ
+use crate::asg::{DType, NodeType, Shape, Value};
 use crate::autograd::Gradients;
 use crate::losses::mse_loss;
 use crate::nn::{Module, TransformerBlock};
@@ -55,10 +57,8 @@ fn main() {
 
     // --- 2. Анализ Форм (Shape Inference) ---
     let mut initial_shapes = HashMap::new();
-    // Определяем формы для входов
     initial_shapes.insert("input_data".to_string(), (vec![1, embed_dim], DType::F32));
     initial_shapes.insert("true_output".to_string(), (vec![1, embed_dim], DType::F32));
-    // Определяем формы для всех параметров модели
     for param in model.parameters() {
         let name = context.borrow().main_graph().get_node(param.node_id).unwrap().name.clone().unwrap();
         let shape: Shape = if name.contains("w_q.weights") || name.contains("w_k.weights") || name.contains("w_v.weights") || name.contains("w_o.weights") {
@@ -146,7 +146,6 @@ fn run_training_loop<B: Backend>(
         // 1. Загружаем данные на устройство (GPU или "CPU")
         let device_data = backend.load_data(&runtime_data).unwrap();
         
-        // Преобразуем device_data (String -> Data) в initial_memo ((AsgId, NodeId) -> Data)
         let mut initial_memo: Memo<B::DeviceData> = HashMap::new();
         for (name, data) in device_data {
             if let Some(node_id) = forward_graph.nodes.values()
@@ -170,7 +169,6 @@ fn run_training_loop<B: Backend>(
         // 4. Собираем градиенты в HashMap
         let mut computed_grads = HashMap::new();
         for (name, value) in param_names.iter().zip(grad_value_vec.into_iter()) {
-            // Пропускаем обновление параметров LayerNorm, так как их градиенты еще не реализованы корректно
             if name.contains("gamma") || name.contains("beta") { continue; }
             computed_grads.insert(name.clone(), value);
         }
