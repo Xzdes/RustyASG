@@ -29,6 +29,8 @@ pub enum ShapeInferenceError {
     },
     #[error("Узел {0} должен быть константой (Literal) для вывода формы")]
     NotALiteral(NodeId),
+    #[error("Вывод формы для типа узла {0:?} еще не реализован")]
+    UnimplementedNodeType(String),
 }
 
 type Result<T> = std::result::Result<T, ShapeInferenceError>;
@@ -103,6 +105,7 @@ impl ShapeInference {
                 let (rs, _) = Self::get_shape_dtype(asg, *r)?;
 
                 if ls.len() < 2 || rs.len() < 2 {
+                    // Для 4D тензоров в attention этот код корректен, так как проверяется общая длина.
                     return Err(ShapeInferenceError::InvalidRank {
                         node_id: node.id,
                         expected: 2,
@@ -123,14 +126,14 @@ impl ShapeInference {
                     });
                 }
 
-                let mut out_shape = ls[..ls.len() - 2].to_vec();
+                let mut out_shape = if ls.len() > 2 { ls[..ls.len() - 2].to_vec() } else { vec![] };
                 out_shape.push(m);
                 out_shape.push(n);
 
                 Ok((out_shape, ld))
             }
 
-            NodeType::ReLU(id) | NodeType::Sigmoid(id) | NodeType::Sqrt(id) => {
+            NodeType::ReLU(id) | NodeType::Sigmoid(id) | NodeType::Sqrt(id) | NodeType::Log(id) => {
                 Self::get_shape_dtype(asg, *id)
             }
 
@@ -172,11 +175,21 @@ impl ShapeInference {
             }
 
             NodeType::Softmax(id) => Self::get_shape_dtype(asg, *id),
-
-            _ => {
-                // Временная заглушка для нереализованных узлов
-                Ok((vec![1], DType::F32))
+            
+            NodeType::GreaterThan(l, r) => {
+                let (ls, _) = Self::get_shape_dtype(asg, *l)?;
+                let (rs, _) = Self::get_shape_dtype(asg, *r)?;
+                let out_shape = if ls.iter().product::<usize>() >= rs.iter().product::<usize>() { ls } else { rs };
+                Ok((out_shape, DType::F32)) // Возвращает 0.0 или 1.0, так что F32
             }
+            
+            NodeType::Power(base_id, _power_id) => {
+                // Форма определяется базой
+                Self::get_shape_dtype(asg, *base_id)
+            }
+
+            // --- Явно обрабатываем остальные узлы, чтобы избежать заглушки ---
+            unimplemented_type => Err(ShapeInferenceError::UnimplementedNodeType(format!("{:?}", unimplemented_type))),
         }
     }
 
@@ -194,6 +207,7 @@ impl ShapeInference {
     pub fn topological_sort(asg: &Asg) -> Result<Vec<NodeId>> {
         let mut sorted = Vec::new();
         let mut visited = HashSet::new();
+        // ВАЖНО: нужно обойти все выходы, а не только один
         for output_id in &asg.outputs {
             Self::build_sorted_graph(*output_id, asg, &mut visited, &mut sorted)?;
         }
@@ -209,7 +223,7 @@ impl ShapeInference {
         if visited.contains(&node_id) {
             return Ok(());
         }
-        visited.insert(node_id);
+        
         let node = asg.get_node(node_id)?;
 
         let inputs = match &node.node_type {
@@ -239,7 +253,11 @@ impl ShapeInference {
         for input_id in inputs {
             Self::build_sorted_graph(input_id, asg, visited, sorted)?;
         }
-        sorted.push(node_id);
+        
+        if !visited.contains(&node_id) {
+            visited.insert(node_id);
+            sorted.push(node_id);
+        }
         Ok(())
     }
 }
