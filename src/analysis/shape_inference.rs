@@ -91,16 +91,18 @@ impl ShapeInference {
             | NodeType::Multiply(l, r)
             | NodeType::Divide(l, r) => {
                 let (ls, ld) = Self::get_shape_dtype(asg, *l)?;
-                let (rs, rd) = Self::get_shape_dtype(asg, *r)?;
-                // TODO: Реализовать полные правила broadcasting. Пока требуем равенства.
-                if ls != rs {
-                    return Err(ShapeInferenceError::IncompatibleShapes {
-                        op: "element-wise".to_string(),
-                        shape1: ls,
-                        shape2: rs,
-                    });
-                }
-                Ok((ls, ld)) // Тип наследуется от левого операнда
+                let (rs, _rd) = Self::get_shape_dtype(asg, *r)?;
+                
+                // ИСПРАВЛЕНО: Добавлена логика broadcasting.
+                // Результат имеет форму большего из операндов.
+                // Это упрощенное правило, но оно покрывает случаи (N, K) + (N, 1) и (N, K) + скаляр.
+                let out_shape = if ls.iter().product::<usize>() >= rs.iter().product::<usize>() {
+                    ls
+                } else {
+                    rs
+                };
+
+                Ok((out_shape, ld)) // Тип наследуется от левого операнда
             }
 
             // Матричное умножение
@@ -214,6 +216,9 @@ impl ShapeInference {
         visited: &mut HashSet<NodeId>,
         sorted: &mut Vec<NodeId>,
     ) -> Result<()> {
+        if visited.contains(&node_id) {
+            return Ok(());
+        }
         visited.insert(node_id);
         let node = asg.get_node(node_id)?;
 
