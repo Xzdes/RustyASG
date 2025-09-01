@@ -18,7 +18,7 @@ impl TransformerBlock {
         context: &Rc<RefCell<GraphContext>>,
         embed_dim: usize,
         num_heads: usize,
-        ff_hidden_dim: usize,
+        _ff_hidden_dim: usize, // Больше не используется здесь, но может быть полезно для именования
         name: &str,
     ) -> Self {
         let attn_name = format!("{}.mha", name);
@@ -29,7 +29,7 @@ impl TransformerBlock {
         Self {
             attention: MultiHeadAttention::new(context, embed_dim, num_heads, &attn_name),
             norm1: LayerNorm::new(context, &norm1_name),
-            feed_forward: FeedForward::new(context, embed_dim, ff_hidden_dim, &ff_name),
+            feed_forward: FeedForward::new(context, &ff_name), // Исправлено: убраны лишние аргументы
             norm2: LayerNorm::new(context, &norm2_name),
         }
     }

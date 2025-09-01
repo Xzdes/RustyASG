@@ -16,6 +16,7 @@
 //! - `NodeType`: Перечисление всех возможных операций (математика, логика, I/O).
 //! - `Value`: Перечисление всех возможных типов данных, с которыми оперирует граф.
 //! - `NodeId`, `AsgId`: Уникальные идентификаторы для узлов и графов.
+//! - `Shape`, `DType`: Информация о форме и типе данных тензора на уровне графа.
 
 use ndarray::ArrayD;
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,9 @@ pub type NodeId = usize;
 
 /// Уникальный идентификатор для самого графа (полезно для вложенных графов).
 pub type AsgId = usize;
+
+/// Представление формы (размерностей) тензора.
+pub type Shape = Vec<usize>;
 
 /// Тип `Result` для операций, связанных с ASG.
 pub type AsgResult<T> = std::result::Result<T, AsgError>;
@@ -40,10 +44,16 @@ pub enum AsgError {
     InputNotFound(String),
 }
 
+/// Перечисление базовых типов данных, поддерживаемых на уровне графа.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum DType {
+    F32,
+    I64,
+    Bool,
+}
+
 /// Перечисление всех возможных типов данных (значений), которые могут
-/// существовать в графе.
-///
-/// ASG спроектирован для работы с мультимодальными данными, а не только с тензорами.
+/// существовать в графе во время выполнения.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     /// Стандартный многомерный массив (тензор) для численных вычислений.
@@ -65,6 +75,8 @@ pub enum Value {
 ///
 /// Каждый узел имеет уникальный ID и тип, который определяет, является ли узел
 /// данными (например, `Literal`) или операцией (`MatrixMultiply`).
+/// Также хранит мета-информацию о форме и типе данных, вычисленную
+/// на этапе Shape Inference.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     /// Уникальный ID узла внутри его графа.
@@ -73,6 +85,10 @@ pub struct Node {
     pub name: Option<String>,
     /// Тип узла, определяющий его поведение.
     pub node_type: NodeType,
+    /// Форма тензора, который производит этот узел. `None`, если еще не вычислено.
+    pub shape: Option<Shape>,
+    /// Тип данных тензора. `None`, если еще не вычислено.
+    pub dtype: Option<DType>,
 }
 
 /// Перечисление всех возможных операций и типов данных в графе.
@@ -155,7 +171,7 @@ pub enum NodeType {
 /// Структура, представляющая сам Абстрактный Семантический Граф.
 ///
 /// Содержит коллекцию всех узлов и определяет "интерфейс" графа —
-/// его входы и выходной узел.
+/// его входы и выходные узлы.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Asg {
     /// Уникальный ID графа.
@@ -166,8 +182,8 @@ pub struct Asg {
     pub nodes: HashMap<NodeId, Node>,
     /// ID узлов, которые являются входами этого графа.
     pub inputs: Vec<NodeId>,
-    /// ID узла, который является результатом вычисления всего графа.
-    pub output: NodeId,
+    /// ID узлов, которые являются результатом вычисления всего графа.
+    pub outputs: Vec<NodeId>,
 }
 
 impl Asg {
@@ -178,19 +194,20 @@ impl Asg {
             name,
             nodes: HashMap::new(),
             inputs: Vec::new(),
-            // Инициализируем "невалидным" значением, которое нужно будет установить.
-            output: NodeId::MAX,
+            outputs: Vec::new(),
         }
     }
 
     /// Добавляет новый узел в граф.
+    /// На этом этапе информация о форме и типе данных отсутствует.
     pub fn add_node(&mut self, name: Option<String>, node_type: NodeType) -> NodeId {
-        // Простой инкрементальный ID для узлов
         let new_id = self.nodes.len();
         let node = Node {
             id: new_id,
             name,
             node_type,
+            shape: None,
+            dtype: None,
         };
         self.nodes.insert(new_id, node);
         new_id
@@ -201,15 +218,27 @@ impl Asg {
         self.inputs = inputs;
     }
 
-    /// Устанавливает выходной узел для графа.
+    /// Устанавливает выходные узлы для графа.
+    pub fn set_outputs(&mut self, outputs: Vec<NodeId>) {
+        self.outputs = outputs;
+    }
+
+    /// Вспомогательный метод для установки одного выходного узла.
     pub fn set_output(&mut self, output: NodeId) {
-        self.output = output;
+        self.outputs = vec![output];
     }
 
     /// Находит узел по его ID.
     pub fn get_node(&self, id: NodeId) -> AsgResult<&Node> {
         self.nodes
             .get(&id)
+            .ok_or(AsgError::NodeNotFound(id))
+    }
+
+    /// Находит изменяемый узел по его ID.
+    pub fn get_node_mut(&mut self, id: NodeId) -> AsgResult<&mut Node> {
+        self.nodes
+            .get_mut(&id)
             .ok_or(AsgError::NodeNotFound(id))
     }
 }

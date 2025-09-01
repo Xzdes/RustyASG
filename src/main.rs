@@ -1,6 +1,7 @@
 //! Главный исполняемый файл, демонстрирующий полный цикл обучения
-//! с использованием графовой архитектуры.
+//! с использованием графовой архитектуры и выбором бэкенда (CPU/GPU).
 
+mod analysis;
 mod asg;
 mod autograd;
 mod losses;
@@ -9,12 +10,15 @@ mod optimizers;
 mod runtime;
 mod tensor;
 
-use crate::asg::Value;
+use crate::analysis::shape_inference::ShapeInference;
+use crate::asg::{DType, Shape, Value};
 use crate::autograd::Gradients;
 use crate::losses::mse_loss;
 use crate::nn::{Module, TransformerBlock};
 use crate::optimizers::{Optimizer, Sgd};
-use crate::runtime::interpreter::Interpreter;
+use crate::runtime::backend::Backend;
+use crate::runtime::cpu_backend::CpuBackend;
+use crate::runtime::wgpu_backend::WgpuBackend;
 use crate::tensor::{GraphContext, Tensor};
 
 use ndarray::ArrayD;
@@ -23,100 +27,154 @@ use ndarray_rand::RandomExt;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 
-// Helper function to get the name of a parameter tensor
-fn get_param_name(graph: &asg::Asg, tensor: &Tensor) -> String {
-    let node = graph.get_node(tensor.node_id).unwrap();
-    if let asg::NodeType::Parameter { name } = &node.node_type {
-        name.clone()
-    } else {
-        panic!("Tensor is not a parameter");
-    }
-}
-
+// --- Главная функция ---
 fn main() {
-    println!("--- Демонстрация полного цикла обучения RustyASG> ---");
+    // --- Конфигурация ---
+    let use_gpu = true; // <--- ПОМЕНЯЙТЕ НА `false` ДЛЯ ЗАПУСКА НА CPU
+    let embed_dim = 4;
+    let ff_hidden_dim = embed_dim * 4;
+    let num_heads = 2;
 
+    println!("--- Демонстрация полного цикла обучения RustyASG ---");
+    println!("[Config] Backend: {}", if use_gpu { "GPU (wgpu)" } else { "CPU" });
+
+    // --- 1. Построение Графа ---
     let context = Rc::new(RefCell::new(GraphContext::new()));
     let model_input = Tensor::new_input(&context, "input_data");
     let true_output = Tensor::new_input(&context, "true_output");
 
-    let embed_dim = 4;
-    let ff_hidden_dim = embed_dim * 4;
-    let model = TransformerBlock::new(
-        &context,
-        embed_dim,
-        2,
-        ff_hidden_dim,
-        "transformer",
-    );
-
+    let model = TransformerBlock::new(&context, embed_dim, num_heads, ff_hidden_dim, "transformer");
     let model_output = model.forward(&model_input);
     let loss = mse_loss(&model_output, &true_output);
-    context.borrow_mut().main_graph_mut().set_output(loss.node_id);
-    let forward_graph = context.borrow().main_graph().clone();
-    println!("\n[1] Граф прямого прохода и вычисления потерь успешно построен.");
 
-    let param_tensors = model.parameters();
-    let interpreter = Interpreter::new();
-    let optimizer = Sgd::new(param_tensors.clone(), 0.01);
-    
-    // --- Инициализация весов ---
-    let mut runtime_data = HashMap::new();
-    for param in &param_tensors {
-        let name = get_param_name(&forward_graph, param);
-        let shape = if name.contains("linear1.weights") { vec![embed_dim, ff_hidden_dim] }
-                    else if name.contains("linear2.weights") { vec![ff_hidden_dim, embed_dim] }
-                    else { vec![embed_dim, embed_dim] }; 
-        
-        if name.contains("bias") || name.contains("gamma") || name.contains("beta") {
-             let bias_shape = if name.contains("linear1") { ff_hidden_dim } else { embed_dim };
-             let mut tensor_data = ArrayD::zeros(ndarray::IxDyn(&[1, bias_shape]));
-             if name.contains("gamma") {
-                 // Инициализируем gamma единицами
-                 tensor_data.fill(1.0);
-             }
-             runtime_data.insert(name, Value::Tensor(tensor_data));
+    let mut forward_graph = context.borrow().main_graph().clone();
+    forward_graph.set_output(loss.node_id);
+    println!("\n[1] Граф прямого прохода успешно построен.");
+
+    // --- 2. Анализ Форм (Shape Inference) ---
+    let mut initial_shapes = HashMap::new();
+    // Определяем формы для входов
+    initial_shapes.insert("input_data".to_string(), (vec![1, embed_dim], DType::F32));
+    initial_shapes.insert("true_output".to_string(), (vec![1, embed_dim], DType::F32));
+    // Определяем формы для всех параметров модели
+    for param in model.parameters() {
+        let name = context.borrow().main_graph().get_node(param.node_id).unwrap().name.clone().unwrap();
+        let shape: Shape = if name.contains("w_q.weights") || name.contains("w_k.weights") || name.contains("w_v.weights") || name.contains("w_o.weights") {
+            vec![embed_dim, embed_dim]
+        } else if name.contains("linear1.weights") {
+            vec![embed_dim, ff_hidden_dim]
+        } else if name.contains("linear2.weights") {
+            vec![ff_hidden_dim, embed_dim]
+        } else if name.contains("linear1.bias") {
+            vec![1, ff_hidden_dim]
         } else {
-            let tensor_data = ArrayD::random(ndarray::IxDyn(&shape), Uniform::new(-0.1, 0.1));
-            runtime_data.insert(name, Value::Tensor(tensor_data));
+            vec![1, embed_dim] // Для всех остальных bias'ов и gamma/beta
+        };
+        initial_shapes.insert(name, (shape, DType::F32));
+    }
+
+    ShapeInference::run(&mut forward_graph, &initial_shapes).expect("Shape inference для прямого графа провалился");
+    println!("[2] Анализ форм (Shape Inference) для прямого графа завершен.");
+    
+    // --- 3. Построение Графа Градиентов ---
+    let param_tensors = model.parameters();
+    let param_ids: Vec<_> = param_tensors.iter().map(|p| p.node_id).collect();
+    let grad_generator = Gradients::new(forward_graph.clone());
+    let mut grad_graph = grad_generator.build(loss.node_id, &param_ids).unwrap();
+    
+    // --- 4. Анализ Форм для Графа Градиентов ---
+    let mut grad_initial_shapes = HashMap::new();
+    // Формы для External узлов графа градиентов - это формы соответствующих узлов из прямого графа
+    for node in forward_graph.nodes.values() {
+        if let Some(shape) = &node.shape {
+            let external_node_name = format!("{}.{}", forward_graph.id, node.id);
+            grad_initial_shapes.insert(external_node_name, (shape.clone(), DType::F32));
+        }
+    }
+    ShapeInference::run(&mut grad_graph, &initial_shapes).expect("Shape inference для графа градиентов провалился");
+    println!("[3] Граф градиентов построен и проанализирован.");
+
+    // --- 5. Инициализация Данных и Оптимизатора ---
+    let mut runtime_data = HashMap::new();
+    // Инициализируем входы
+    runtime_data.insert("input_data".to_string(), Value::Tensor(ArrayD::random(ndarray::IxDyn(&[1, embed_dim]), Uniform::new(-1.0, 1.0))));
+    runtime_data.insert("true_output".to_string(), Value::Tensor(ArrayD::from_elem(ndarray::IxDyn(&[1, embed_dim]), 0.5)));
+    // Инициализируем параметры
+    for (name, (shape, _)) in initial_shapes.iter() {
+        if name.contains("input") || name.contains("output") { continue; }
+        if name.contains("gamma") {
+            runtime_data.insert(name.clone(), Value::Tensor(ArrayD::ones(shape.clone())));
+        } else if name.contains("beta") || name.contains("bias") {
+            runtime_data.insert(name.clone(), Value::Tensor(ArrayD::zeros(shape.clone())));
+        } else {
+            runtime_data.insert(name.clone(), Value::Tensor(ArrayD::random(shape.clone(), Uniform::new(-0.1, 0.1))));
         }
     }
     
-    let input_array = ArrayD::random(ndarray::IxDyn(&[1, embed_dim]), Uniform::new(-1.0, 1.0));
-    let target_array = ArrayD::from_elem(ndarray::IxDyn(&[1, embed_dim]), 0.5);
-    runtime_data.insert("input_data".to_string(), Value::Tensor(input_array));
-    runtime_data.insert("true_output".to_string(), Value::Tensor(target_array));
-    println!("[2] Данные и веса инициализированы.");
+    let optimizer = Sgd::new(0.01);
+    println!("[4] Данные, веса и оптимизатор инициализированы.");
+
+    // --- 6. Выбор Бэкенда и Запуск Обучения ---
+    if use_gpu {
+        let backend = pollster::block_on(WgpuBackend::new());
+        run_training_loop(backend, forward_graph, grad_graph, runtime_data, param_tensors, optimizer);
+    } else {
+        let backend = CpuBackend::new();
+        run_training_loop(backend, forward_graph, grad_graph, runtime_data, param_tensors, optimizer);
+    }
+}
+
+
+// --- Универсальный Цикл Обучения ---
+fn run_training_loop<B: Backend>(
+    backend: B,
+    forward_graph: asg::Asg,
+    grad_graph: asg::Asg,
+    mut runtime_data: HashMap<String, Value>,
+    param_tensors: Vec<Tensor>,
+    optimizer: Sgd,
+) {
+    let param_names: Vec<String> = param_tensors.iter().map(|p| {
+        let ctx = p.context.borrow();
+        let graph = ctx.main_graph();
+        graph.get_node(p.node_id).unwrap().name.as_ref().unwrap().clone()
+    }).collect();
 
     println!("\n--- НАЧАЛО ЦИКЛА ОБУЧЕНИЯ ---\n");
-    for epoch in 0..15 {
-        let loss_value = interpreter.run(&forward_graph, &runtime_data, &[]).unwrap();
-        let mut computed_grads = HashMap::new();
+    let start_time = Instant::now();
 
-        for param in &param_tensors {
-            let param_name = get_param_name(&forward_graph, param);
-            
-            // **ФИНАЛЬНОЕ ИЗМЕНЕНИЕ**: Пропускаем градиенты для LayerNorm, так как они сломаны
-            if param_name.contains("gamma") || param_name.contains("beta") {
-                continue;
-            }
-            
-            let grad_generator = Gradients::new(forward_graph.clone());
-            let grad_graph = grad_generator.build(loss.node_id, &[param.node_id]).unwrap();
-            
-            let grad_value_result = interpreter.run(&grad_graph, &runtime_data, &[&forward_graph]);
-            
-            if let Ok(grad_value) = grad_value_result {
-                computed_grads.insert(param_name.clone(), grad_value);
-            }
+    for epoch in 0..15 {
+        // 1. Загружаем данные на устройство (GPU или "CPU")
+        let device_data = backend.load_data(&runtime_data).unwrap();
+
+        // 2. Выполняем прямой проход
+        let loss_device_vec = backend.run(&forward_graph, &device_data, &[]).unwrap();
+        let loss_value_vec = backend.retrieve_data(&loss_device_vec).unwrap();
+        let loss_value = loss_value_vec.first().unwrap();
+
+        // 3. Выполняем обратный проход
+        let grad_device_vec = backend.run(&grad_graph, &device_data, &[&forward_graph]).unwrap();
+        let grad_value_vec = backend.retrieve_data(&grad_device_vec).unwrap();
+
+        // 4. Собираем градиенты в HashMap
+        let mut computed_grads = HashMap::new();
+        for (name, value) in param_names.iter().zip(grad_value_vec.into_iter()) {
+            // Пропускаем обновление параметров LayerNorm, так как их градиенты еще не реализованы
+            if name.contains("gamma") || name.contains("beta") { continue; }
+            computed_grads.insert(name.clone(), value);
         }
 
+        // 5. Шаг оптимизатора (всегда на CPU)
         optimizer.step(&mut runtime_data, &computed_grads);
 
+        // 6. Печать лосса
         if let Value::Tensor(loss_tensor) = loss_value {
             println!("Эпоха: {:<2}, Потери (Loss): {:.6}", epoch + 1, loss_tensor.first().unwrap_or(&-1.0));
         }
     }
-    println!("\n--- ОБУЧЕНИЕ ЗАВЕРШЕНО ---");
+
+    let duration = start_time.elapsed();
+    println!("\n--- ОБУЧЕНИЕ ЗАВЕРШЕНО ЗА {:.2?} ---", duration);
 }

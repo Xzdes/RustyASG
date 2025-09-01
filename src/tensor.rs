@@ -228,14 +228,18 @@ impl Tensor {
     // --- Операции трансформации ---
 
     pub fn reshape(&self, shape: Vec<i64>) -> Self {
-        let shape_data = ArrayD::from_shape_vec(ndarray::IxDyn(&[shape.len()]), shape).unwrap();
-        let shape_node = self.context.borrow_mut().main_graph_mut().add_node(
+        // Создаем узел-литерал, который содержит новую форму
+        let shape_data_f32: Vec<f32> = shape.iter().map(|&x| x as f32).collect();
+        let shape_array = ArrayD::from_shape_vec(ndarray::IxDyn(&[shape.len()]), shape_data_f32).unwrap();
+        
+        let shape_node_id = self.context.borrow_mut().main_graph_mut().add_node(
             None,
-            NodeType::Literal(Value::Tensor(shape_data.mapv(|x| x as f32))),
+            NodeType::Literal(Value::Tensor(shape_array)),
         );
+
         let reshape_node_id = self.context.borrow_mut().main_graph_mut().add_node(
             None,
-            NodeType::Reshape(self.node_id, shape_node),
+            NodeType::Reshape(self.node_id, shape_node_id),
         );
         Self {
             node_id: reshape_node_id,

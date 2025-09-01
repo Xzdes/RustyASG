@@ -17,3 +17,8 @@ rand = "0.9.2"
 ndarray-rand = "0.15.0"
 thiserror = "2.0.16"
 serde = { version = "1.0", features = ["derive"] }
+
+wgpu = "26.0.1"
+pollster = "0.4.0"
+bytemuck = { version = "1.12", features = ["derive"] }
+futures-intrusive = "0.5.0"

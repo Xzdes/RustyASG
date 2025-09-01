@@ -3,5 +3,7 @@
 //! Каждый подмодуль здесь представляет собой бэкенд, способный
 //! выполнить граф вычислений.
 
-// Объявляем `interpreter.rs` как публичный подмодуль.
-pub mod interpreter;
+// Объявляем `backend.rs`, `cpu_backend.rs` и `wgpu_backend.rs` как публичные подмодули.
+pub mod backend;
+pub mod cpu_backend;
+pub mod wgpu_backend;
