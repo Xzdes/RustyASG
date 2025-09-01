@@ -89,8 +89,26 @@ impl Gradients {
 
             match node_type {
                 NodeType::Add(lhs_id, rhs_id) => {
-                    self.accumulate_grad(lhs_id, upstream_grad_id);
-                    self.accumulate_grad(rhs_id, upstream_grad_id);
+                    // ИСПРАВЛЕНО: Сначала получаем все формы, чтобы не нарушать правила borrow checker.
+                    let lhs_shape = self.source_asg.get_node(lhs_id)?.shape.as_ref().ok_or(AutogradError::MissingShapeInfo(lhs_id))?.clone();
+                    let rhs_shape = self.source_asg.get_node(rhs_id)?.shape.as_ref().ok_or(AutogradError::MissingShapeInfo(rhs_id))?.clone();
+                    let grad_shape = self.source_asg.get_node(node_id)?.shape.as_ref().ok_or(AutogradError::MissingShapeInfo(node_id))?.clone();
+                    
+                    let mut grad_lhs = upstream_grad_id;
+                    if lhs_shape != grad_shape {
+                        grad_lhs = self.grad_asg.add_node(None, NodeType::Sum(grad_lhs));
+                        let imported_lhs = self.import_node(lhs_id);
+                        grad_lhs = self.grad_asg.add_node(None, NodeType::Broadcast(grad_lhs, imported_lhs));
+                    }
+                    self.accumulate_grad(lhs_id, grad_lhs);
+
+                    let mut grad_rhs = upstream_grad_id;
+                    if rhs_shape != grad_shape {
+                        grad_rhs = self.grad_asg.add_node(None, NodeType::Sum(grad_rhs));
+                        let imported_rhs = self.import_node(rhs_id);
+                        grad_rhs = self.grad_asg.add_node(None, NodeType::Broadcast(grad_rhs, imported_rhs));
+                    }
+                    self.accumulate_grad(rhs_id, grad_rhs);
                 }
                 NodeType::Subtract(lhs_id, rhs_id) => {
                     self.accumulate_grad(lhs_id, upstream_grad_id);
@@ -134,10 +152,12 @@ impl Gradients {
                     self.accumulate_grad(base_id, local_grad);
                 }
                 NodeType::MatrixMultiply(a_id, b_id) => {
+                    let b_rank = self.source_asg.get_node(b_id)?.shape.as_ref().ok_or(AutogradError::MissingShapeInfo(b_id))?.len();
+                    let a_rank = self.source_asg.get_node(a_id)?.shape.as_ref().ok_or(AutogradError::MissingShapeInfo(a_id))?.len();
+                    
                     let imported_a = self.import_node(a_id);
                     let imported_b = self.import_node(b_id);
 
-                    let b_rank = self.source_asg.get_node(b_id)?.shape.as_ref().ok_or(AutogradError::MissingShapeInfo(b_id))?.len();
                     let b_transposed = if b_rank >= 2 {
                         self.grad_asg.add_node(None, NodeType::Transpose(imported_b, b_rank - 2, b_rank - 1))
                     } else {
@@ -146,7 +166,6 @@ impl Gradients {
                     let grad_a = self.grad_asg.add_node(None, NodeType::MatrixMultiply(upstream_grad_id, b_transposed));
                     self.accumulate_grad(a_id, grad_a);
 
-                    let a_rank = self.source_asg.get_node(a_id)?.shape.as_ref().ok_or(AutogradError::MissingShapeInfo(a_id))?.len();
                     let a_transposed = if a_rank >= 2 {
                         self.grad_asg.add_node(None, NodeType::Transpose(imported_a, a_rank - 2, a_rank - 1))
                     } else {
