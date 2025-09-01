@@ -28,22 +28,25 @@ impl WgpuBackend {
     /// Создает новый экземпляр WgpuBackend.
     /// Эта функция асинхронная, так как инициализация GPU требует времени.
     pub async fn new() -> Self {
-        // ИСПРАВЛЕНИЕ 1 (E0308): `new` ожидает ссылку.
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        // API для wgpu 0.19
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
+
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions::default())
             .await
             .expect("Не удалось найти подходящий GPU адаптер.");
 
-        // ИСПРАВЛЕНИЕ 2 (E0063, E0061): `trace` должен быть внутри `DeviceDescriptor`,
-        // а `request_device` принимает только один аргумент.
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("WGPU Device"),
+                    // ИСПРАВЛЕНО: `features` -> `required_features`
                     required_features: wgpu::Features::empty(),
+                    // ИСПРАВЛЕНО: `limits` -> `required_limits`
                     required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::default(),
                 },
                 None, // trace_path
             )
@@ -164,9 +167,10 @@ impl Backend for WgpuBackend {
             let buffer_slice = staging_buffer.slice(..);
             let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
             buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
-
-            // ИСПРАВЛЕНИЕ 3 (E0433): `MaintainBase` не найден, используем `Maintain::Wait`.
+            
+            // API для wgpu 0.19
             self.device.poll(wgpu::Maintain::Wait);
+
             pollster::block_on(receiver.receive()).unwrap().unwrap();
 
             let data = buffer_slice.get_mapped_range();
@@ -213,14 +217,12 @@ impl WgpuBackend {
             source: wgpu::ShaderSource::Wgsl(shader_code.into()),
         });
         
-        // ИСПРАВЛЕНИЕ 4 (E0063, E0308): Добавлены недостающие поля `cache`, `compilation_options` и `Some()` для `entry_point`.
+        // API для wgpu 0.19
         let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some(&format!("{}_pipeline", op)),
             layout: None,
             module: &shader_module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
+            entry_point: "main",
         });
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -276,14 +278,12 @@ impl WgpuBackend {
             source: wgpu::ShaderSource::Wgsl(full_shader.into()),
         });
         
-        // ИСПРАВЛЕНИЕ 5 (E0063, E0308): Добавлены недостающие поля `cache`, `compilation_options` и `Some()` для `entry_point`.
+        // API для wgpu 0.19
         let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some(&format!("{}_pipeline", op)),
             layout: None,
             module: &shader_module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
+            entry_point: "main",
         });
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
