@@ -1,3 +1,5 @@
+// --- Файл: src/losses.rs (финальная рабочая версия для замены) ---
+
 //! Модуль, содержащий реализации функций потерь в графовой парадигме.
 //!
 //! Функции потерь здесь - это обычные Rust-функции, которые принимают
@@ -5,7 +7,6 @@
 //! для вычисления значения ошибки.
 
 use crate::tensor::Tensor;
-use ndarray::arr0;
 
 /// Вычисляет символьный граф для Среднеквадратичной Ошибки (MSE).
 ///
@@ -23,17 +24,11 @@ pub fn mse_loss(y_pred: &Tensor, y_true: &Tensor) -> Tensor {
     // (y_pred - y_true)
     let error = y_pred - y_true;
 
-    // error^2
-    // Для возведения в квадрат нам нужен узел-константа со значением 2.0
-    let power_context = &error.context;
-    let two = Tensor::new_literal(
-        power_context,
-        arr0(2.0f32).into_dyn(),
-        "two_literal",
-    );
-    
-    // Используем метод .pow()
-    let squared_error = error.pow(&two);
+    // --- ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ ---
+    // Вместо использования нестабильной операции .pow(&two), мы используем
+    // численно стабильное умножение error * error для возведения в квадрат.
+    // Это устраняет коренную причину генерации NaN в обратном проходе на GPU.
+    let squared_error = &error * &error;
 
     // sum(squared_error)
     let loss = squared_error.sum();
