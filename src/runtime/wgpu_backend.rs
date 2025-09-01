@@ -156,6 +156,7 @@ impl Backend for WgpuBackend {
                 
                 NodeType::Mean(id) => self.execute_reduction("mean", &output_shape, memo.get(&(main_asg.id, *id)).unwrap())?,
                 NodeType::Sum(id) => self.execute_reduction("sum", &output_shape, memo.get(&(main_asg.id, *id)).unwrap())?,
+                NodeType::Variance(id) => self.execute_variance(&output_shape, memo.get(&(main_asg.id, *id)).unwrap())?,
                 NodeType::Softmax(id) => self.execute_softmax(&output_shape, memo.get(&(main_asg.id, *id)).unwrap())?,
 
                 NodeType::MatrixMultiply(l, r) => self.execute_matmul(&output_shape, memo.get(&(main_asg.id, *l)).unwrap(), memo.get(&(main_asg.id, *r)).unwrap())?,
@@ -318,7 +319,7 @@ impl WgpuBackend {
             fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
                 let outer_index = global_id.x;
                 let last_dim: u32 = {last_dim}u;
-                let last_dim_f32: f32 = {last_dim_f};
+                let last_dim_f32: f32 = {last_dim_f:.1};
                 
                 if (outer_index >= {outer_dims}u) {{ return; }}
 
@@ -337,6 +338,44 @@ impl WgpuBackend {
         op_init = op_init, 
         op_accum = op_accum, 
         op_final = op_final
+        );
+
+        self.dispatch_shader(&shader_code, output_shape, &[input])
+    }
+
+    fn execute_variance(&self, output_shape: &Shape, input: &GpuTensor) -> Result<GpuTensor, RuntimeError> {
+        let last_dim = *input.shape.last().unwrap_or(&1);
+        let outer_dims: usize = input.shape.iter().rev().skip(1).product();
+
+        let shader_code = format!(r#"
+            @group(0) @binding(0) var<storage, read> input_buf: array<f32>;
+            @group(0) @binding(1) var<storage, read_write> output_buf: array<f32>;
+
+            @compute @workgroup_size(64)
+            fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
+                let outer_index = global_id.x;
+                let last_dim: u32 = {last_dim}u;
+                let last_dim_f32: f32 = {last_dim_f:.1};
+                
+                if (outer_index >= {outer_dims}u) {{ return; }}
+
+                var sum: f32 = 0.0;
+                var sum_sq: f32 = 0.0;
+                for (var i: u32 = 0u; i < last_dim; i = i + 1u) {{
+                    let val = input_buf[outer_index * last_dim + i];
+                    sum = sum + val;
+                    sum_sq = sum_sq + val * val;
+                }}
+                
+                let mean = sum / last_dim_f32;
+                let mean_sq = sum_sq / last_dim_f32;
+                
+                output_buf[outer_index] = mean_sq - mean * mean;
+            }}
+        "#, 
+        last_dim = last_dim,
+        last_dim_f = last_dim as f32,
+        outer_dims = outer_dims
         );
 
         self.dispatch_shader(&shader_code, output_shape, &[input])
