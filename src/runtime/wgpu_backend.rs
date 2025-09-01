@@ -165,7 +165,7 @@ impl WgpuBackend {
         let op_code = match op {
             "add" => "return a + b;", "sub" => "return a - b;", "mul" => "return a * b;",
             "div" => "return a / b;", "pow" => "return pow(a, b);",
-            "gt"  => "return select(0.0, 1.0, a > b);", // <-- ИСПРАВЛЕНО ЗДЕСЬ
+            "gt"  => "return select(0.0, 1.0, a > b);", // <-- ИСПРАВЛЕНИЕ ЗДЕСЬ
             _ => panic!("Unhandled op"),
         };
         
