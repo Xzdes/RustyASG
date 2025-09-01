@@ -280,14 +280,8 @@ impl WgpuBackend {
             _ => panic!("Неизвестный бинарный шейдер"),
         };
         
-        // Проверяем, нужна ли трансляция (broadcasting) для rhs
         let rhs_is_scalar = rhs.shape.iter().product::<usize>() == 1;
-
-        let rhs_access = if rhs_is_scalar {
-            "rhs_buf[0]"
-        } else {
-            "rhs_buf[index]"
-        };
+        let rhs_access = if rhs_is_scalar { "rhs_buf[0]" } else { "rhs_buf[index]" };
 
         let shader_code = format!(r#"
             fn op(lhs: f32, rhs: f32) -> f32 {{
@@ -312,16 +306,9 @@ impl WgpuBackend {
         let last_dim = *input.shape.last().unwrap_or(&1);
         let outer_dims: usize = input.shape.iter().rev().skip(1).product();
 
-        let op_init = match op {
-            "sum" | "mean" => "0.0",
-            _ => panic!("Unknown reduction op")
-        };
+        let op_init = match op { "sum" | "mean" => "0.0", _ => panic!("Unknown reduction op") };
         let op_accum = "sum = sum + val;";
-        let op_final = match op {
-            "sum" => "return sum;",
-            "mean" => "return sum / f32(last_dim);",
-            _ => ""
-        };
+        let op_final = match op { "sum" => "sum", "mean" => "sum / last_dim_f32", _ => "" };
 
         let shader_code = format!(r#"
             @group(0) @binding(0) var<storage, read> input_buf: array<f32>;
@@ -330,30 +317,34 @@ impl WgpuBackend {
             @compute @workgroup_size(64)
             fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
                 let outer_index = global_id.x;
-                let last_dim: u32 = {last_dim};
+                let last_dim: u32 = {last_dim}u;
+                let last_dim_f32: f32 = {last_dim_f};
                 
-                if (outer_index >= {outer_dims}) {{ return; }}
+                if (outer_index >= {outer_dims}u) {{ return; }}
 
                 var sum: f32 = {op_init};
-                for (var i: u32 = 0; i < last_dim; i = i + 1) {{
+                for (var i: u32 = 0u; i < last_dim; i = i + 1u) {{
                     let val = input_buf[outer_index * last_dim + i];
                     {op_accum}
                 }}
                 
-                output_buf[outer_index] = {{
-                    {op_final}
-                }};
+                output_buf[outer_index] = {op_final};
             }}
-        "#, last_dim=last_dim, outer_dims=outer_dims, op_init=op_init, op_accum=op_accum, op_final=op_final);
+        "#, 
+        last_dim = last_dim,
+        last_dim_f = last_dim as f32,
+        outer_dims = outer_dims, 
+        op_init = op_init, 
+        op_accum = op_accum, 
+        op_final = op_final
+        );
 
         self.dispatch_shader(&shader_code, output_shape, &[input])
     }
 
     fn execute_matmul(&self, output_shape: &Shape, a: &GpuTensor, b: &GpuTensor) -> Result<GpuTensor, RuntimeError> {
         if a.shape.len() == 2 && b.shape.len() == 2 { // 2D Matmul
-            let m = a.shape[0];
-            let k = a.shape[1];
-            let n = b.shape[1];
+            let m = a.shape[0]; let k = a.shape[1]; let n = b.shape[1];
             let shader = format!(r#"
                 @group(0) @binding(0) var<storage, read> a: array<f32>;
                 @group(0) @binding(1) var<storage, read> b: array<f32>;
@@ -361,11 +352,11 @@ impl WgpuBackend {
                 
                 @compute @workgroup_size(8, 8)
                 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
-                    let M: u32 = {m}; let K: u32 = {k}; let N: u32 = {n};
+                    let M: u32 = {m}u; let K: u32 = {k}u; let N: u32 = {n}u;
                     let r = global_id.y; let c = global_id.x;
                     if (r >= M || c >= N) {{ return; }}
                     var sum = 0.0;
-                    for (var i: u32 = 0; i < K; i = i + 1) {{
+                    for (var i: u32 = 0u; i < K; i = i + 1u) {{
                         sum = sum + a[r * K + i] * b[i * N + c];
                     }}
                     out[r * N + c] = sum;
@@ -382,7 +373,7 @@ impl WgpuBackend {
                 
                 @compute @workgroup_size(8, 8)
                 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
-                    let B0: u32 = {b0}; let B1: u32 = {b1}; let M: u32 = {m}; let K: u32 = {k}; let N: u32 = {n};
+                    let B0: u32 = {b0}u; let B1: u32 = {b1}u; let M: u32 = {m}u; let K: u32 = {k}u; let N: u32 = {n}u;
                     let b0_idx = global_id.z / B1;
                     let b1_idx = global_id.z % B1;
                     let r = global_id.y; let c = global_id.x;
@@ -393,7 +384,7 @@ impl WgpuBackend {
                     let out_offset = (b0_idx * B1 + b1_idx) * M * N;
 
                     var sum = 0.0;
-                    for (var i: u32 = 0; i < K; i = i + 1) {{
+                    for (var i: u32 = 0u; i < K; i = i + 1u) {{
                         sum = sum + a[a_offset + r * K + i] * b[b_offset + i * N + c];
                     }}
                     out[out_offset + r * N + c] = sum;
@@ -416,24 +407,24 @@ impl WgpuBackend {
             @compute @workgroup_size(64)
             fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
                 let outer_index = global_id.x;
-                let last_dim: u32 = {last_dim};
-                if (outer_index >= {outer_dims}) {{ return; }}
+                let last_dim: u32 = {last_dim}u;
+                if (outer_index >= {outer_dims}u) {{ return; }}
 
                 let offset = outer_index * last_dim;
                 
                 var max_val = -3.402823466e+38; // f32.min
-                for (var i: u32 = 0; i < last_dim; i = i + 1) {{
+                for (var i: u32 = 0u; i < last_dim; i = i + 1u) {{
                     max_val = max(max_val, input_buf[offset + i]);
                 }}
 
                 var sum: f32 = 0.0;
-                for (var i: u32 = 0; i < last_dim; i = i + 1) {{
+                for (var i: u32 = 0u; i < last_dim; i = i + 1u) {{
                     let val = exp(input_buf[offset + i] - max_val);
                     output_buf[offset + i] = val;
                     sum = sum + val;
                 }}
                 
-                for (var i: u32 = 0; i < last_dim; i = i + 1) {{
+                for (var i: u32 = 0u; i < last_dim; i = i + 1u) {{
                     output_buf[offset + i] = output_buf[offset + i] / sum;
                 }}
             }}
@@ -449,7 +440,6 @@ impl WgpuBackend {
             @group(0) @binding(0) var<storage, read> input_buf: array<f32>;
             @group(0) @binding(1) var<storage, read_write> output_buf: array<f32>;
 
-            // Динамически создаем строки для размеров
             {dims_vars}
 
             @compute @workgroup_size(64)
@@ -457,25 +447,24 @@ impl WgpuBackend {
                 let out_idx = global_id.x;
                 if (out_idx >= arrayLength(&output_buf)) {{ return; }}
 
-                // Рассчитываем многомерный индекс для выходного тензора
                 var out_coords: array<u32, {rank}>;
                 var temp_idx = out_idx;
                 {out_coords_calc}
 
-                // Создаем входной индекс, меняя местами оси
                 var in_coords = out_coords;
-                in_coords[{axis1}] = out_coords[{axis2}];
-                in_coords[{axis2}] = out_coords[{axis1}];
+                in_coords[{axis1}u] = out_coords[{axis2}u];
+                in_coords[{axis2}u] = out_coords[{axis1}u];
                 
-                // Рассчитываем линейный индекс для входного тензора
-                var in_idx: u32 = 0;
+                var in_idx: u32 = 0u;
                 {in_idx_calc}
                 
                 output_buf[out_idx] = input_buf[in_idx];
             }}
         "#, 
-        rank = rank, axis1=axis1, axis2=axis2,
-        dims_vars = (0..rank).map(|i| format!("let d{}: u32 = {};", i, input.shape[i])).collect::<Vec<_>>().join("\n"),
+        rank = rank, 
+        axis1 = axis1, 
+        axis2 = axis2,
+        dims_vars = (0..rank).map(|i| format!("let d{i}: u32 = {dim}u;", i=i, dim=input.shape[i])).collect::<Vec<_>>().join("\n"),
         out_coords_calc = (0..rank).rev().map(|i| {
             let stride: usize = output_shape.iter().skip(i + 1).product();
             format!("out_coords[{i}] = temp_idx / {stride}u; temp_idx = temp_idx % {stride}u;", i=i, stride=stride)
@@ -491,7 +480,7 @@ impl WgpuBackend {
     fn execute_broadcast(&self, output_shape: &Shape, source: &GpuTensor, target: &GpuTensor) -> Result<GpuTensor, RuntimeError> {
         let shader = r#"
             @group(0) @binding(0) var<storage, read> source_buf: array<f32>;
-            @group(0) @binding(1) var<storage, read> target_buf: array<f32>; // Только для определения длины
+            @group(0) @binding(1) var<storage, read> target_buf: array<f32>;
             @group(0) @binding(2) var<storage, read_write> output_buf: array<f32>;
 
             @compute @workgroup_size(64)
@@ -550,7 +539,6 @@ impl WgpuBackend {
         Ok(GpuTensor { buffer: output_buffer, shape: output_shape.clone() })
     }
 
-    // Специальная версия для 3D диспатча (нужна для 4D Matmul)
     fn dispatch_shader_3d(&self, shader_code: &str, output_shape: &Shape, inputs: &[&GpuTensor]) -> Result<GpuTensor, RuntimeError> {
         let output_size = output_shape.iter().product::<usize>() as u64 * 4;
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -588,13 +576,9 @@ impl WgpuBackend {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
             compute_pass.set_pipeline(&pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
-            // Расчет для 4D Matmul
-            let n = inputs[1].shape[3] as u32;
-            let m = inputs[0].shape[2] as u32;
-            let b0 = inputs[0].shape[0] as u32;
-            let b1 = inputs[0].shape[1] as u32;
-            let dispatch_x = (n + 7) / 8;
-            let dispatch_y = (m + 7) / 8;
+            let n = inputs[1].shape[3] as u32; let m = inputs[0].shape[2] as u32;
+            let b0 = inputs[0].shape[0] as u32; let b1 = inputs[0].shape[1] as u32;
+            let dispatch_x = (n + 7) / 8; let dispatch_y = (m + 7) / 8;
             let dispatch_z = b0 * b1;
             compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, dispatch_z);
         }
