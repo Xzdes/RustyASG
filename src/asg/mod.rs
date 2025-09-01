@@ -105,6 +105,7 @@ pub enum NodeType {
     /// Используется в графе градиентов, чтобы ссылаться на значения
     /// из графа прямого прохода.
     External {
+        name: String,
         source_asg_id: AsgId,
         source_node_id: NodeId,
     },

@@ -89,11 +89,11 @@ fn main() {
     // Формы для External узлов графа градиентов - это формы соответствующих узлов из прямого графа
     for node in forward_graph.nodes.values() {
         if let Some(shape) = &node.shape {
-            let external_node_name = format!("{}.{}", forward_graph.id, node.id);
+            let external_node_name = format!("external_{}_{}", forward_graph.id, node.id);
             grad_initial_shapes.insert(external_node_name, (shape.clone(), DType::F32));
         }
     }
-    ShapeInference::run(&mut grad_graph, &initial_shapes).expect("Shape inference для графа градиентов провалился");
+    ShapeInference::run(&mut grad_graph, &grad_initial_shapes).expect("Shape inference для графа градиентов провалился");
     println!("[3] Граф градиентов построен и проанализирован.");
 
     // --- 5. Инициализация Данных и Оптимизатора ---

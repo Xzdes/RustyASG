@@ -55,7 +55,7 @@ impl<'a> ExecutionContext<'a> {
             NodeType::Input { name } => self.inputs.get(name).cloned().ok_or_else(|| RuntimeError::MissingInput(name.clone(), node_id)),
             NodeType::Parameter { name } => self.inputs.get(name).cloned().ok_or_else(|| RuntimeError::MissingParameter(name.clone(), node_id)),
             NodeType::Literal(value) => Ok(value.clone()),
-            NodeType::External { source_asg_id, source_node_id } => self.evaluate_node(*source_asg_id, *source_node_id),
+            NodeType::External { source_asg_id, source_node_id, .. } => self.evaluate_node(*source_asg_id, *source_node_id),
 
             // Бинарные операции
             NodeType::Add(l, r) | NodeType::Subtract(l, r) | NodeType::Multiply(l, r) | NodeType::Divide(l, r) |

@@ -46,16 +46,13 @@ impl ShapeInference {
     /// * `initial_shapes` - HashMap, предоставляющий формы и типы для всех
     ///   входных (`Input`) и параметрических (`Parameter`) узлов. Ключ - имя узла.
     pub fn run(asg: &mut Asg, initial_shapes: &HashMap<String, (Shape, DType)>) -> Result<()> {
-        // Выполняем топологическую сортировку для всех выходных узлов.
         let sorted_nodes = Self::topological_sort(asg)?;
 
         for node_id in sorted_nodes {
             let mut node = asg.get_node(node_id)?.clone();
 
-            // Вычисляем форму и тип для текущего узла
             let (shape, dtype) = Self::infer_node_shape(asg, &node, initial_shapes)?;
 
-            // Обновляем узел в графе
             node.shape = Some(shape);
             node.dtype = Some(dtype);
             asg.nodes.insert(node_id, node);
@@ -71,21 +68,20 @@ impl ShapeInference {
         initial_shapes: &HashMap<String, (Shape, DType)>,
     ) -> Result<(Shape, DType)> {
         match &node.node_type {
-            // Узлы, форма которых определяется извне
-            NodeType::Input { name } | NodeType::Parameter { name } => initial_shapes
+            NodeType::Input { name }
+            | NodeType::Parameter { name }
+            | NodeType::External { name, .. } => initial_shapes
                 .get(name)
                 .cloned()
-                .ok_or(ShapeInferenceError::MissingInitialShape(name.clone())),
+                .ok_or_else(|| ShapeInferenceError::MissingInitialShape(name.clone())),
 
-            // Форма определяется значением литерала
             NodeType::Literal(value) => match value {
                 Value::Tensor(arr) => Ok((arr.shape().to_vec(), DType::F32)),
                 Value::Integer(_) => Ok((vec![], DType::I64)),
                 Value::Boolean(_) => Ok((vec![], DType::Bool)),
-                _ => Ok((vec![], DType::F32)), // Для Unit, Text и т.д.
+                _ => Ok((vec![], DType::F32)), 
             },
 
-            // Бинарные поэлементные операции
             NodeType::Add(l, r)
             | NodeType::Subtract(l, r)
             | NodeType::Multiply(l, r)
@@ -93,19 +89,15 @@ impl ShapeInference {
                 let (ls, ld) = Self::get_shape_dtype(asg, *l)?;
                 let (rs, _rd) = Self::get_shape_dtype(asg, *r)?;
                 
-                // ИСПРАВЛЕНО: Добавлена логика broadcasting.
-                // Результат имеет форму большего из операндов.
-                // Это упрощенное правило, но оно покрывает случаи (N, K) + (N, 1) и (N, K) + скаляр.
                 let out_shape = if ls.iter().product::<usize>() >= rs.iter().product::<usize>() {
                     ls
                 } else {
                     rs
                 };
 
-                Ok((out_shape, ld)) // Тип наследуется от левого операнда
+                Ok((out_shape, ld))
             }
 
-            // Матричное умножение
             NodeType::MatrixMultiply(l, r) => {
                 let (ls, ld) = Self::get_shape_dtype(asg, *l)?;
                 let (rs, _) = Self::get_shape_dtype(asg, *r)?;
@@ -138,27 +130,26 @@ impl ShapeInference {
                 Ok((out_shape, ld))
             }
 
-            // Унарные поэлементные операции
             NodeType::ReLU(id) | NodeType::Sigmoid(id) | NodeType::Sqrt(id) => {
                 Self::get_shape_dtype(asg, *id)
             }
 
-            // Операции редукции
-            NodeType::Sum(_) => Ok((vec![], DType::F32)), // Сумма по всему тензору -> скаляр
+            NodeType::Sum(_) => Ok((vec![], DType::F32)),
             NodeType::Mean(id) | NodeType::Variance(id) => {
                 let (shape, dtype) = Self::get_shape_dtype(asg, *id)?;
                 if shape.is_empty() {
-                    Ok((vec![], dtype)) // Редукция скаляра - скаляр
+                    Ok((vec![], dtype)) 
                 } else {
-                    // Редукция по последней оси
                     let new_shape = shape[..shape.len() - 1].to_vec();
                     Ok((new_shape, dtype))
                 }
             }
 
-            // Трансформации
             NodeType::Transpose(id, axis1, axis2) => {
                 let (mut shape, dtype) = Self::get_shape_dtype(asg, *id)?;
+                if *axis1 >= shape.len() || *axis2 >= shape.len() {
+                    return Err(ShapeInferenceError::InvalidRank { node_id: node.id, expected: axis1.max(axis2) + 1, actual: shape.len() });
+                }
                 shape.swap(*axis1, *axis2);
                 Ok((shape, dtype))
             }
@@ -180,9 +171,8 @@ impl ShapeInference {
                 Ok((target_shape, dtype))
             }
 
-            NodeType::Softmax(id) => Self::get_shape_dtype(asg, *id), // Softmax не меняет форму
+            NodeType::Softmax(id) => Self::get_shape_dtype(asg, *id),
 
-            // TODO: Реализовать вывод для остальных узлов
             _ => {
                 // Временная заглушка для нереализованных узлов
                 Ok((vec![1], DType::F32))
@@ -243,13 +233,11 @@ impl ShapeInference {
             | NodeType::Log(a) => vec![*a],
 
             NodeType::Transpose(a, _, _) => vec![*a],
-            _ => vec![], // Для Input, Parameter, Literal и т.д.
+            _ => vec![], 
         };
 
         for input_id in inputs {
-            if !visited.contains(&input_id) {
-                Self::build_sorted_graph(input_id, asg, visited, sorted)?;
-            }
+            Self::build_sorted_graph(input_id, asg, visited, sorted)?;
         }
         sorted.push(node_id);
         Ok(())
