@@ -199,9 +199,9 @@ fn test_grad_sum_broadcast() {
 
 #[test]
 fn test_grad_complex_ops() {
-    // Тестируемая функция: y = ((x - x.mean()) / (x.variance() + C).sqrt()).sum()
-    // Это упрощенная версия LayerNorm без обучаемых параметров.
-    let simplified_layernorm_fn = |x: &Tensor| {
+    // Тестируемая функция: y = (normalized * C).sum()
+    // Умножение на константу C гарантирует, что итоговый градиент не будет нулевым.
+    let robust_layernorm_fn = |x: &Tensor| {
         let epsilon_const = Tensor::new_literal(&x.context, ndarray::arr0(1e-5).into_dyn(), "epsilon");
         
         let mean = x.mean();
@@ -212,19 +212,27 @@ fn test_grad_complex_ops() {
         let std_dev = var_plus_eps.sqrt();
         
         let normalized = x_minus_mean / std_dev;
+
+        // --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ В ТЕСТЕ ---
+        // Умножаем на константу, чтобы градиент не был нулевым.
+        let constants = Tensor::new_literal(
+            &x.context,
+            ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[1, 4]), vec![0.1, -0.2, 0.3, -0.4]).unwrap(),
+            "C"
+        );
+        let final_op = normalized * constants;
         
-        normalized.sum()
+        final_op.sum()
     };
 
     let x = ArrayD::from_shape_vec(ndarray::IxDyn(&[1, 4]), vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     
-    let analytic_grad = get_analytic_grad(simplified_layernorm_fn, &x);
-    let numeric_grad = get_numeric_grad(simplified_layernorm_fn, &x);
+    let analytic_grad = get_analytic_grad(robust_layernorm_fn, &x);
+    let numeric_grad = get_numeric_grad(robust_layernorm_fn, &x);
     
     println!("--- Тест для сложных операций (упрощенный LayerNorm) ---");
     println!("Аналитический градиент: {:?}", analytic_grad.as_slice().unwrap());
     println!("Численный градиент:    {:?}", numeric_grad.as_slice().unwrap());
-    // Ожидаемый градиент для этого случая близок к нулю из-за нормализации.
     
     assert_grads_are_close(&analytic_grad, &numeric_grad, TOLERANCE);
 }
