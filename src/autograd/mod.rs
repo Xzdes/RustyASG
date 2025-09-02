@@ -76,9 +76,13 @@ impl Gradients {
                 continue;
             }
 
-            let node = self.source_asg.get_node(node_id)?;
-            let node_type = node.node_type.clone();
-            let grad_shape = node.shape.as_ref().ok_or(AutogradError::MissingShapeInfo(node_id))?.clone();
+            let (node_type, grad_shape) = {
+                let node = self.source_asg.get_node(node_id)?;
+                (
+                    node.node_type.clone(),
+                    node.shape.as_ref().ok_or(AutogradError::MissingShapeInfo(node_id))?.clone()
+                )
+            };
             
             let upstream_grad_id = self.get_or_create_zero_grad(node_id);
 
@@ -300,7 +304,7 @@ impl Gradients {
             }
         }
         crate::analysis::shape_inference::ShapeInference::run(&mut self.grad_asg, &grad_initial_shapes)
-            .map_err(|_e| AutogradError::MissingShapeInfo(0))?;
+            .map_err(|_e| AutogradError::MissingShapeInfo(0))?; // Упрощенная обработка ошибок
 
         Ok(self.grad_asg)
     }
@@ -350,14 +354,11 @@ impl Gradients {
 
         let source_node = self.source_asg.get_node(node_id).expect("Node not found in source graph for zero grad");
         let shape = source_node.shape.as_ref().expect("Shape info missing for zero grad");
-
         let zeros = ndarray::ArrayD::zeros(shape.clone());
-        
         let zero_grad_id = self.grad_asg.add_node(
             Some(format!("zero_grad_for_{}", node_id)),
             NodeType::Literal(Value::Tensor(zeros)),
         );
-        
         let node_mut = self.grad_asg.get_node_mut(zero_grad_id).unwrap();
         node_mut.shape = Some(shape.clone());
         node_mut.dtype = source_node.dtype;
