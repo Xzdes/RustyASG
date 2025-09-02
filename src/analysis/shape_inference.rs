@@ -183,28 +183,36 @@ impl ShapeInference {
                 Ok((out_shape, DType::F32)) // Возвращает 0.0 или 1.0, так что F32
             }
 
-             NodeType::MaxPool2d { input, kernel_size, stride } => {
-                let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
+NodeType::MaxPool2d { input, kernel_size, stride } => {
+    let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
 
-                if input_shape.len() != 4 {
-                    return Err(ShapeInferenceError::InvalidRank {
-                        node_id: node.id,
-                        expected: 4, // Ожидаем [N, C, H, W]
-                        actual: input_shape.len(),
-                    });
-                }
+    if input_shape.len() != 4 {
+        return Err(ShapeInferenceError::InvalidRank {
+            node_id: node.id,
+            expected: 4, // Ожидаем [N, C, H, W]
+            actual: input_shape.len(),
+        });
+    }
 
-                let n = input_shape[0];
-                let c = input_shape[1];
-                let h = input_shape[2];
-                let w = input_shape[3];
+    let n = input_shape[0];
+    let c = input_shape[1];
+    let h = input_shape[2];
+    let w = input_shape[3];
 
-                let out_h = (h - kernel_size.0) / stride.0 + 1;
-                let out_w = (w - kernel_size.1) / stride.1 + 1;
+    if h < kernel_size.0 || w < kernel_size.1 {
+        // Пока нет отдельной ошибки → кидаем MissingShapeInfo
+        return Err(ShapeInferenceError::MissingShapeInfo(node.id));
+    }
 
-                let output_shape = vec![n, c, out_h, out_w];
-                Ok((output_shape, dtype))
-            }
+    let out_h = (h - kernel_size.0) / stride.0 + 1;
+    let out_w = (w - kernel_size.1) / stride.1 + 1;
+
+    let output_shape = vec![n, c, out_h, out_w];
+    Ok((output_shape, dtype))
+}
+
+
+
 
             NodeType::MaxUnpool2d { original_input, .. } => {
                 // Форма выхода unpooling'а всегда совпадает с формой ИСХОДНОГО входа
@@ -276,6 +284,8 @@ impl ShapeInference {
             | NodeType::Log(a) => vec![*a],
 
             NodeType::Transpose(a, _, _) => vec![*a],
+            NodeType::MaxPool2d { input, .. } => vec![*input],
+            NodeType::MaxUnpool2d { input, original_input, .. } => vec![*input, *original_input],
             _ => vec![], 
         };
 

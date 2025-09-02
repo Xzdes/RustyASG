@@ -138,14 +138,33 @@ impl Gradients {
                     self.accumulate_grad(x_id, final_grad)?;
                 }
                 NodeType::Variance(x_id) => {
-                    let n_val = *self.source_asg.get_node(x_id)?.shape.as_ref().unwrap().last().unwrap_or(&1) as f32;
+     let n_val = *self.source_asg.get_node(x_id)?.shape.as_ref().unwrap().last().unwrap_or(&1) as f32;
+                    if n_val == 0.0 { continue; } // Защита от деления на ноль
+
+                    // Импортируем узел `x` из исходного графа
                     let imported_x = self.import_node(x_id)?;
-                    let mean_x = self.grad_asg.add_node(None, NodeType::Mean(imported_x));
-                    let x_minus_mean = self.grad_asg.add_node(None, NodeType::Subtract(imported_x, mean_x));
-                    let two_div_n = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(2.0 / n_val).into_dyn())));
-                    let term1 = self.grad_asg.add_node(None, NodeType::Multiply(x_minus_mean, two_div_n));
+                    
+                    // ВАЖНО: Мы должны импортировать результат `mean(x)` из исходного графа, а не вычислять его заново.
+                    // Для этого нам нужно найти узел Mean(x) в исходном графе. Но так как узел Variance
+                    // не хранит ID узла Mean, мы воссоздаем его здесь. Это менее эффективно, но математически корректно.
+                    let mean_node = self.grad_asg.add_node(None, NodeType::Mean(imported_x));
+                    
+                    // Вычисляем (x - mean(x))
+                    let x_minus_mean = self.grad_asg.add_node(None, NodeType::Subtract(imported_x, mean_node));
+
+                    // Вычисляем константу 2.0 / N
+                    let two_div_n_val = 2.0 / n_val;
+                    let two_div_n_node = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(two_div_n_val).into_dyn())));
+
+                    // Вычисляем (2/N) * (x - mean(x))
+                    let term = self.grad_asg.add_node(None, NodeType::Multiply(two_div_n_node, x_minus_mean));
+
+                    // Транслируем вышестоящий градиент до нужной формы
                     let broadcasted_grad = self.grad_asg.add_node(None, NodeType::Broadcast(upstream_grad_id, imported_x));
-                    let final_grad = self.grad_asg.add_node(None, NodeType::Multiply(term1, broadcasted_grad));
+
+                    // Умножаем на вышестоящий градиент (цепное правило)
+                    let final_grad = self.grad_asg.add_node(None, NodeType::Multiply(broadcasted_grad, term));
+
                     self.accumulate_grad(x_id, final_grad)?;
                 }
                 NodeType::MaxPool2d { input, kernel_size, stride } => {

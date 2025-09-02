@@ -5,7 +5,7 @@
 
 use super::backend::{Backend, Memo, RuntimeError};
 use crate::asg::{Asg, AsgId, NodeId, NodeType, Value};
-use ndarray::{s, Array, Array4, Axis, Ix2, IxDyn, Zip};
+use ndarray::{s, Array4, Axis, Ix2, Zip};
 use std::collections::HashMap;
 
 /// Контекст выполнения для одного или нескольких связанных графов на CPU.
