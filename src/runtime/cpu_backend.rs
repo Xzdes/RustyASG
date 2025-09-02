@@ -44,12 +44,14 @@ impl<'a> ExecutionContext<'a> {
             .ok_or(RuntimeError::NodeNotFound(node_id, asg_id))?;
 
         let result = match &node.node_type {
-            NodeType::Input { .. } | NodeType::Parameter { .. } => {
-                 // Входы и параметры должны быть уже в memo к моменту вызова `run`
-                 return Err(RuntimeError::MissingInput(
-                    node.name.clone().unwrap_or_default(),
-                    node_id
-                ));
+            NodeType::Input { name } => {
+                // Входы и параметры должны быть уже в memo к моменту вызова `run`
+                // Если мы дошли сюда, значит, значения нет в кэше, это ошибка.
+                return Err(RuntimeError::MissingInput(name.clone(), node.id));
+            }
+            NodeType::Parameter { name } => {
+                // Аналогично для параметров.
+                return Err(RuntimeError::MissingParameter(name.clone(), node.id));
             }
             NodeType::Literal(value) => Ok(value.clone()),
             NodeType::External { source_asg_id, source_node_id, .. } => {
