@@ -3,13 +3,12 @@ name = "rustyasg"
 version = "0.1.0"
 edition = "2021"
 authors = ["Xzdes"]
-description = "A deep learning framework in Rust, focusing on autograd and Transformer architectures."
+description = "A deep learning framework in Rust, focusing on an Abstract Semantic Graph (ASG) for autograd and Transformer architectures."
 readme = "README.md"
 repository = "https://github.com/Xzdes/RustyAsg"
 license = "MIT"
-keywords = ["deep-learning", "machine-learning", "autograd", "neural-network"]
-categories = ["science"]
-
+keywords = ["deep-learning", "machine-learning", "autograd", "neural-network", "wgpu"]
+categories = ["science", "computer-vision"]
 
 [dependencies]
 ndarray = { version = "0.16.1", features = ["serde"] }
