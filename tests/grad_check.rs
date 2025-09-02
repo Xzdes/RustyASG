@@ -203,26 +203,29 @@ fn test_grad_complex_ops() {
         let epsilon_const = Tensor::new_literal(&x.context, ndarray::arr0(1e-5).into_dyn(), "epsilon");
         
         let mean = x.mean();
-        let x_minus_mean = x - mean;
+        // Используем ссылки (&) для всех операций
+        let x_minus_mean = x - &mean;
         
         let variance = x.variance();
-        let var_plus_eps = variance + epsilon_const;
+        // Используем ссылки (&)
+        let var_plus_eps = &variance + &epsilon_const;
         let std_dev = var_plus_eps.sqrt();
         
-        let normalized = x_minus_mean / std_dev;
+        // Используем ссылки (&)
+        let stable_denominator = &std_dev + &epsilon_const;
+        let normalized = &x_minus_mean / &stable_denominator;
         
         let constants = Tensor::new_literal(
             &x.context,
             ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[1, 4]), vec![0.1, -0.2, 0.3, -0.4]).unwrap(),
             "C"
         );
-        let final_op = normalized * constants;
+        // Используем ссылки (&)
+        let final_op = &normalized * &constants;
         
         final_op.sum()
     };
 
-    // --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ ---
-    // Используем менее симметричные данные, чтобы избежать численных артефактов.
     let x = ArrayD::from_shape_vec(ndarray::IxDyn(&[1, 4]), vec![5.0, 1.0, 8.0, 2.0]).unwrap();
     
     let analytic_grad = get_analytic_grad(robust_layernorm_fn, &x);
@@ -234,7 +237,6 @@ fn test_grad_complex_ops() {
     
     assert_grads_are_close(&analytic_grad, &numeric_grad, TOLERANCE);
 }
-
 #[test]
 fn test_grad_maxpool2d() {
     let pool_fn = |x: &Tensor| {

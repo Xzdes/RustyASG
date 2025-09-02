@@ -105,16 +105,33 @@ impl Gradients {
                     self.accumulate_grad(b_id, grad_b)?;
                 }
                 NodeType::Divide(a_id, b_id) => {
+                    let grad_shape = node.shape.as_ref().unwrap().clone();
+                    
+                    // --- grad(a) = grad(upstream) / b
+                    let a_shape = self.source_asg.get_node(a_id)?.shape.as_ref().unwrap().clone();
                     let imported_b = self.import_node(b_id)?;
-                    let grad_a = self.grad_asg.add_node(None, NodeType::Divide(upstream_grad_id, imported_b));
+                    let mut grad_a = self.grad_asg.add_node(None, NodeType::Divide(upstream_grad_id, imported_b));
+                    if a_shape != grad_shape {
+                        // Если форма 'a' была меньше, суммируем градиент
+                        grad_a = self.grad_asg.add_node(None, NodeType::Sum(grad_a));
+                    }
                     self.accumulate_grad(a_id, grad_a)?;
                     
+                    // --- grad(b) = -grad(upstream) * a / b^2
+                    let b_shape = self.source_asg.get_node(b_id)?.shape.as_ref().unwrap().clone();
                     let imported_a = self.import_node(a_id)?;
                     let neg_one = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(-1.0).into_dyn())));
+                    
+                    // Переиспользуем `imported_b` для возведения в квадрат
                     let b_squared = self.grad_asg.add_node(None, NodeType::Multiply(imported_b, imported_b));
                     let num = self.grad_asg.add_node(None, NodeType::Multiply(upstream_grad_id, imported_a));
                     let neg_num = self.grad_asg.add_node(None, NodeType::Multiply(num, neg_one));
-                    let grad_b = self.grad_asg.add_node(None, NodeType::Divide(neg_num, b_squared));
+                    let mut grad_b = self.grad_asg.add_node(None, NodeType::Divide(neg_num, b_squared));
+                    
+                    if b_shape != grad_shape {
+                        // Если форма 'b' была меньше (наш случай!), суммируем градиент
+                        grad_b = self.grad_asg.add_node(None, NodeType::Sum(grad_b));
+                    }
                     self.accumulate_grad(b_id, grad_b)?;
                 }
                 NodeType::Sum(x_id) => {
