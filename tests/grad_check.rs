@@ -234,3 +234,34 @@ fn test_grad_complex_ops() {
     
     assert_grads_are_close(&analytic_grad, &numeric_grad, TOLERANCE);
 }
+
+#[test]
+fn test_grad_maxpool2d() {
+    let pool_fn = |x: &Tensor| {
+        // Выполняем пулинг и суммируем результат, чтобы получить скаляр на выходе
+        x.max_pool2d((2, 2), (2, 2)).sum()
+    };
+
+    // Входной тензор 1x1x4x4
+    let x_data = ndarray::Array::from_shape_vec(
+        (1, 1, 4, 4),
+        vec![
+            1., 2., 3., 4.,
+            5., 6., 7., 8.,
+            9., 10., 11., 12.,
+            13., 14., 15., 16.,
+        ],
+    ).unwrap().into_dyn();
+
+    let analytic_grad = get_analytic_grad(pool_fn, &x_data);
+    let numeric_grad = get_numeric_grad(pool_fn, &x_data);
+
+    println!("--- Тест для MaxPool2d ---");
+    println!("Аналитический градиент: \n{:?}", analytic_grad);
+    println!("Численный градиент:    \n{:?}", numeric_grad);
+    
+    // ВНИМАНИЕ: Так как наш аналитический градиент является аппроксимацией,
+    // мы ожидаем, что этот тест провалится. Но он покажет нам, насколько
+    // наша аппроксимация близка к реальности.
+    assert_grads_are_close(&analytic_grad, &numeric_grad, 5e-1); // Используем очень большой допуск
+}

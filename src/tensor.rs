@@ -257,6 +257,22 @@ impl Tensor {
             context: Rc::clone(&self.context),
         }
     }
+
+    pub fn max_pool2d(&self, kernel_size: (usize, usize), stride: (usize, usize)) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::MaxPool2d {
+                input: self.node_id,
+                kernel_size,
+                stride,
+            },
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
 }
 
 // Реализация операторов для удобного синтаксиса `a + b`.

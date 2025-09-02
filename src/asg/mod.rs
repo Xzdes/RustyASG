@@ -118,6 +118,7 @@ pub enum NodeType {
     MatrixMultiply(NodeId, NodeId),
     GreaterThan(NodeId, NodeId), // Поэлементное сравнение >
 
+
     // --- Поэлементные операции ---
     ReLU(NodeId),
     Sigmoid(NodeId),
@@ -131,12 +132,30 @@ pub enum NodeType {
     Mean(NodeId), // Среднее по последней оси
     Variance(NodeId), // Дисперсия по последней оси
 
+
     // --- Операции трансформации ---
     Reshape(NodeId, NodeId), // Второй аргумент - тензор с новой формой
     Transpose(NodeId, usize, usize), // Оси для транспонирования
     /// Транслирует (broadcasts) первый тензор (скаляр) до формы второго тензора.
     /// Используется в основном в графе градиентов, например для grad(Sum).
     Broadcast(NodeId, NodeId),
+
+        MaxPool2d {
+        /// Входной тензор, обычно формы [N, C, H, W].
+        input: NodeId,
+        /// Размер окна, например (2, 2).
+        kernel_size: (usize, usize),
+        /// Шаг окна, например (2, 2).
+        stride: (usize, usize),
+    },
+        MaxUnpool2d {
+        /// Входной градиент (из вышестоящего слоя).
+        input: NodeId,
+        /// Ссылка на ИСХОДНЫЙ вход MaxPool2d (нужен для определения формы выхода).
+        original_input: NodeId, 
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    },
 
     // --- Управляющие конструкции ---
     /// Условное выполнение. Выполняет один из двух под-графов в зависимости

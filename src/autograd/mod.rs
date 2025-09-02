@@ -260,6 +260,23 @@ impl Gradients {
                     let grad_x = self.grad_asg.add_node(None, NodeType::Transpose(upstream_grad_id, axis1, axis2));
                     self.accumulate_grad(x_id, grad_x);
                 }
+
+                NodeType::MaxPool2d { input, kernel_size, stride } => {
+                    // Создаем узел MaxUnpool2d, передавая в него входящий градиент
+                    // и ССЫЛКУ на исходный вход, чтобы unpool знал, до какой формы "раздуть" градиент.
+                    let original_input_imported = self.import_node(input);
+                    let grad_x = self.grad_asg.add_node(
+                        None,
+                        NodeType::MaxUnpool2d {
+                            input: upstream_grad_id,
+                            original_input: original_input_imported,
+                            kernel_size,
+                            stride,
+                        },
+                    );
+                    self.accumulate_grad(input, grad_x);
+                }
+
                 NodeType::Reshape(x_id, _shape_node_id) => {
                     let x_shape = self.source_asg.get_node(x_id)?
                         .shape.as_ref()

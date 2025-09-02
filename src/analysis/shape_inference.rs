@@ -182,6 +182,35 @@ impl ShapeInference {
                 let out_shape = if ls.iter().product::<usize>() >= rs.iter().product::<usize>() { ls } else { rs };
                 Ok((out_shape, DType::F32)) // Возвращает 0.0 или 1.0, так что F32
             }
+
+             NodeType::MaxPool2d { input, kernel_size, stride } => {
+                let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
+
+                if input_shape.len() != 4 {
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: 4, // Ожидаем [N, C, H, W]
+                        actual: input_shape.len(),
+                    });
+                }
+
+                let n = input_shape[0];
+                let c = input_shape[1];
+                let h = input_shape[2];
+                let w = input_shape[3];
+
+                let out_h = (h - kernel_size.0) / stride.0 + 1;
+                let out_w = (w - kernel_size.1) / stride.1 + 1;
+
+                let output_shape = vec![n, c, out_h, out_w];
+                Ok((output_shape, dtype))
+            }
+
+            NodeType::MaxUnpool2d { original_input, .. } => {
+                // Форма выхода unpooling'а всегда совпадает с формой ИСХОДНОГО входа
+                // для соответствующего pooling'а.
+                Self::get_shape_dtype(asg, *original_input)
+            }
             
             NodeType::Power(base_id, _power_id) => {
                 // Форма определяется базой

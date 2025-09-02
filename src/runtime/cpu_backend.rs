@@ -5,7 +5,7 @@
 
 use super::backend::{Backend, Memo, RuntimeError};
 use crate::asg::{Asg, AsgId, NodeId, NodeType, Value};
-use ndarray::{s, Axis, Ix2, Zip};
+use ndarray::{s, Array, Array4, Axis, Ix2, IxDyn, Zip};
 use std::collections::HashMap;
 
 /// Контекст выполнения для одного или нескольких связанных графов на CPU.
@@ -100,6 +100,17 @@ impl<'a> ExecutionContext<'a> {
             NodeType::Transpose(op, ax1, ax2) => {
                 let operand = self.evaluate_node(asg_id, *op)?;
                 op_transpose(operand, *ax1, *ax2)
+            }
+
+            NodeType::MaxPool2d { input, kernel_size, stride } => {
+                let operand = self.evaluate_node(asg_id, *input)?;
+                op_max_pool2d(operand, *kernel_size, *stride)
+            }
+
+            NodeType::MaxUnpool2d { input, original_input, kernel_size, stride } => {
+                let operand = self.evaluate_node(asg_id, *input)?;
+                let original_operand = self.evaluate_node(asg_id, *original_input)?;
+                op_max_unpool2d(operand, original_operand, *kernel_size, *stride)
             }
 
             _ => Err(RuntimeError::UnimplementedOperation(format!("{:?}", node.node_type))),
@@ -203,4 +214,107 @@ fn op_matmul(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
         return Ok(Value::Tensor(a_mat.dot(&b_mat).into_dyn()));
     } else if a.ndim() == 0 || b.ndim() == 0 { return Ok(Value::Tensor(&a * &b)); }
     Err(RuntimeError::UnimplementedOperation(format!("Matmul for dims {} and {}", a.ndim(), b.ndim())))
+}
+
+fn op_max_pool2d(
+    operand: Value,
+    kernel_size: (usize, usize),
+    stride: (usize, usize),
+) -> Result<Value, RuntimeError> {
+    let input_tensor = match operand {
+        Value::Tensor(val) => val,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
+    };
+
+    // Преобразуем в Array4 для удобства, ожидая [N, C, H, W]
+    let input_arr: Array4<f32> = input_tensor.into_dimensionality().map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+
+    let (n, c, h, w) = input_arr.dim();
+    let (kh, kw) = kernel_size;
+    let (sh, sw) = stride;
+
+    let out_h = (h - kh) / sh + 1;
+    let out_w = (w - kw) / sw + 1;
+
+    let mut output_arr = Array4::<f32>::zeros((n, c, out_h, out_w));
+
+    // Проходим по каждому элементу батча и каждому каналу
+    for n_idx in 0..n {
+        for c_idx in 0..c {
+            // Проходим по выходному тензору, чтобы заполнить его
+            for oh_idx in 0..out_h {
+                for ow_idx in 0..out_w {
+                    let h_start = oh_idx * sh;
+                    let w_start = ow_idx * sw;
+
+                    // Вырезаем окно из входного тензора
+                    let window = input_arr.slice(s![n_idx, c_idx, h_start..h_start + kh, w_start..w_start + kw]);
+                    
+                    // Находим максимальное значение в окне
+                    let max_val = window.iter().fold(f32::NEG_INFINITY, |max, &val| max.max(val));
+                    
+                    output_arr[[n_idx, c_idx, oh_idx, ow_idx]] = max_val;
+                }
+            }
+        }
+    }
+
+    // Преобразуем результат обратно в ArrayD<f32>
+    Ok(Value::Tensor(output_arr.into_dyn()))
+}
+
+fn op_max_unpool2d(
+    operand: Value, // Входящий градиент (маленький тензор)
+    original_input: Value, // Исходный вход (большой тензор)
+    kernel_size: (usize, usize),
+    stride: (usize, usize),
+) -> Result<Value, RuntimeError> {
+    // --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+    let grad_tensor = match operand {
+        Value::Tensor(val) => val.into_dimensionality::<ndarray::Ix4>().map_err(|e| RuntimeError::ShapeError(e.to_string()))?,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
+    };
+    let original_tensor = match original_input {
+        Value::Tensor(val) => val.into_dimensionality::<ndarray::Ix4>().map_err(|e| RuntimeError::ShapeError(e.to_string()))?,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
+    };
+    // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
+    let (_n, _c, h, w) = original_tensor.dim();
+    let (kh, kw) = kernel_size;
+    let (sh, sw) = stride;
+
+    let mut output_arr = Array4::<f32>::zeros((_n, _c, h, w));
+
+    // Проходим по маленькому тензору градиентов
+    for n_idx in 0..grad_tensor.dim().0 {
+        for c_idx in 0..grad_tensor.dim().1 {
+            for oh_idx in 0..grad_tensor.dim().2 {
+                for ow_idx in 0..grad_tensor.dim().3 {
+                    let h_start = oh_idx * sh;
+                    let w_start = ow_idx * sw;
+                    
+                    // Вырезаем окно из ИСХОДНОГО тензора
+                    let window = original_tensor.slice(s![n_idx, c_idx, h_start..h_start + kh, w_start..w_start + kw]);
+                    let grad_val = grad_tensor[[n_idx, c_idx, oh_idx, ow_idx]];
+                    
+                    // Находим позицию максимума в этом окне
+                    let mut max_val = f32::NEG_INFINITY;
+                    let mut max_pos = (0, 0);
+                    for r in 0..kh {
+                        for col in 0..kw {
+                            if window[[r, col]] > max_val {
+                                max_val = window[[r, col]];
+                                max_pos = (r, col);
+                            }
+                        }
+                    }
+                    
+                    // Помещаем градиент ТОЛЬКО в эту позицию в выходном (большом) тензоре
+                    output_arr[[n_idx, c_idx, h_start + max_pos.0, w_start + max_pos.1]] += grad_val;
+                }
+            }
+        }
+    }
+    Ok(Value::Tensor(output_arr.into_dyn()))
 }
