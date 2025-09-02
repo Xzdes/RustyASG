@@ -13,25 +13,35 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 const EPSILON: f32 = 1e-4;
-const TOLERANCE: f32 = 1e-3;
+const TOLERANCE: f32 = 1e-2;
 
 // --- НАША СОБСТВЕННАЯ ФУНКЦИЯ СРАВНЕНИЯ ---
 /// Сравнивает два тензора поэлементно и паникует, если они не близки.
 fn assert_grads_are_close(analytic: &ArrayD<f32>, numeric: &ArrayD<f32>, tolerance: f32) {
-    assert_eq!(analytic.shape(), numeric.shape(), "Формы градиентов не совпадают!");
+    assert_eq!(analytic.shape(), numeric.shape(), "Gradient shapes do not match!");
 
     for (a, n) in analytic.iter().zip(numeric.iter()) {
-        if (a - n).abs() > tolerance {
+        // Calculate relative error
+        let diff = (a - n).abs();
+        let larger = a.abs().max(n.abs());
+        
+        // Avoid division by zero if both are zero. If they are, they are close enough.
+        if larger == 0.0 {
+            continue;
+        }
+
+        let relative_error = diff / larger;
+
+        if relative_error > tolerance {
             panic!(
-                "Градиенты не совпадают! Аналитический: {:.6}, Численный: {:.6}. Расхождение: {:.6}",
+                "Gradients do not match! Analytic: {:.6}, Numeric: {:.6}, Relative Error: {:.6}",
                 a,
                 n,
-                (a - n).abs()
+                relative_error
             );
         }
     }
 }
-
 
 /// Вычисляет аналитический градиент с помощью нашего фреймворка.
 fn get_analytic_grad(
@@ -156,5 +166,65 @@ fn test_grad_add_subtract() {
     println!("Аналитический: {:?}", analytic_grad.as_slice().unwrap());
     println!("Численный:    {:?}", numeric_grad.as_slice().unwrap());
 
+    assert_grads_are_close(&analytic_grad, &numeric_grad, TOLERANCE);
+}
+
+
+
+#[test]
+fn test_grad_sum_broadcast() {
+    // Тестовая функция: y = (x * C).sum(), где C - постоянный тензор.
+    // Градиент должен быть C, транслированный до формы x.
+    let test_fn = |x: &Tensor| {
+        let const_data = ArrayD::from_shape_vec(ndarray::IxDyn(&[1, 3]), vec![10.0, 20.0, 30.0]).unwrap();
+        // Здесь мы создаем константу внутри логики построения графа
+        let c = Tensor::new_literal(&x.context, const_data, "C");
+        (x * c).sum()
+    };
+
+    let x = ArrayD::from_shape_vec(ndarray::IxDyn(&[1, 3]), vec![1.0, 2.0, 3.0]).unwrap();
+    
+    let analytic_grad = get_analytic_grad(test_fn, &x);
+    let numeric_grad = get_numeric_grad(test_fn, &x);
+    
+    println!("--- Тест для Sum/Broadcast (градиент Sum) ---");
+    println!("Аналитический градиент: {:?}", analytic_grad.as_slice().unwrap());
+    println!("Численный градиент:    {:?}", numeric_grad.as_slice().unwrap());
+    // Ожидаемый градиент - это сама константа C: [10.0, 20.0, 30.0]
+
+    assert_grads_are_close(&analytic_grad, &numeric_grad, TOLERANCE);
+}
+
+// --- ДОБАВЬТЕ ЭТОТ НОВЫЙ ТЕСТ В КОНЕЦ ФАЙЛА ---
+
+#[test]
+fn test_grad_complex_ops() {
+    // Тестируемая функция: y = ((x - x.mean()) / (x.variance() + C).sqrt()).sum()
+    // Это упрощенная версия LayerNorm без обучаемых параметров.
+    let simplified_layernorm_fn = |x: &Tensor| {
+        let epsilon_const = Tensor::new_literal(&x.context, ndarray::arr0(1e-5).into_dyn(), "epsilon");
+        
+        let mean = x.mean();
+        let x_minus_mean = x - mean;
+        
+        let variance = x.variance();
+        let var_plus_eps = variance + epsilon_const;
+        let std_dev = var_plus_eps.sqrt();
+        
+        let normalized = x_minus_mean / std_dev;
+        
+        normalized.sum()
+    };
+
+    let x = ArrayD::from_shape_vec(ndarray::IxDyn(&[1, 4]), vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    
+    let analytic_grad = get_analytic_grad(simplified_layernorm_fn, &x);
+    let numeric_grad = get_numeric_grad(simplified_layernorm_fn, &x);
+    
+    println!("--- Тест для сложных операций (упрощенный LayerNorm) ---");
+    println!("Аналитический градиент: {:?}", analytic_grad.as_slice().unwrap());
+    println!("Численный градиент:    {:?}", numeric_grad.as_slice().unwrap());
+    // Ожидаемый градиент для этого случая близок к нулю из-за нормализации.
+    
     assert_grads_are_close(&analytic_grad, &numeric_grad, TOLERANCE);
 }

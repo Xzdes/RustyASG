@@ -236,35 +236,51 @@ impl Gradients {
                     let grad_x = self.grad_asg.add_node(None, NodeType::Broadcast(upstream_grad_id, imported_x));
                     self.accumulate_grad(x_id, grad_x);
                 }
+                
+                // --- НАЧАЛО ЗАМЕНЫ ---
                 NodeType::Mean(x_id) => {
-                    let x_node = self.source_asg.nodes.get(&x_id).ok_or(AutogradError::NodeNotFound(x_id))?;
+                    let x_node = self.source_asg.get_node(x_id)?;
                     let x_shape = x_node.shape.as_ref().ok_or(AutogradError::MissingShapeInfo(x_id))?;
+                    // N - это количество элементов, по которым мы усредняли (размер последней оси)
                     let n_val = *x_shape.last().unwrap_or(&1) as f32;
-                    
                     let n = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(n_val).into_dyn())));
+
+                    // Градиент mean(x) - это входящий градиент, разделенный на N и "разбросанный"
+                    // по исходной форме тензора x.
+                    let grad_div_n = self.grad_asg.add_node(None, NodeType::Divide(upstream_grad_id, n));
                     let imported_x = self.import_node(x_id);
-                    let broadcasted_grad = self.grad_asg.add_node(None, NodeType::Broadcast(upstream_grad_id, imported_x));
-                    let final_grad = self.grad_asg.add_node(None, NodeType::Divide(broadcasted_grad, n));
+                    let final_grad = self.grad_asg.add_node(None, NodeType::Broadcast(grad_div_n, imported_x));
+                    
                     self.accumulate_grad(x_id, final_grad);
                 }
                 NodeType::Variance(x_id) => {
-                    let x_node = self.source_asg.nodes.get(&x_id).ok_or(AutogradError::NodeNotFound(x_id))?;
+                    let x_node = self.source_asg.get_node(x_id)?;
                     let x_shape = x_node.shape.as_ref().ok_or(AutogradError::MissingShapeInfo(x_id))?;
                     let n_val = *x_shape.last().unwrap_or(&1) as f32;
-
-                    let imported_x = self.import_node(x_id);
-                    let x_mean = self.grad_asg.add_node(None, NodeType::Mean(imported_x));
-                    let x_minus_mean = self.grad_asg.add_node(None, NodeType::Subtract(imported_x, x_mean));
-                    
-                    let two = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(2.0).into_dyn())));
                     let n = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(n_val).into_dyn())));
 
-                    let term1 = self.grad_asg.add_node(None, NodeType::Multiply(two, x_minus_mean));
-                    let broadcasted_grad = self.grad_asg.add_node(None, NodeType::Broadcast(upstream_grad_id, imported_x));
-                    let term2 = self.grad_asg.add_node(None, NodeType::Multiply(term1, broadcasted_grad));
-                    let final_grad = self.grad_asg.add_node(None, NodeType::Divide(term2, n));
+                    let imported_x = self.import_node(x_id);
+                    
+                    // Градиент variance(x) равен 2 * (x - mean(x)) / N, умноженный на входящий градиент.
+                    // Создаем узел для mean(x) в графе градиентов.
+                    let mean_node = self.grad_asg.add_node(None, NodeType::Mean(imported_x));
+                    // Создаем узел для (x - mean(x)).
+                    let x_minus_mean = self.grad_asg.add_node(None, NodeType::Subtract(imported_x, mean_node));
+                    
+                    let two = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(2.0).into_dyn())));
+                    let two_mul_diff = self.grad_asg.add_node(None, NodeType::Multiply(two, x_minus_mean));
+                    
+                    // (2 * (x - mean(x))) / N
+                    let local_grad_unscaled = self.grad_asg.add_node(None, NodeType::Divide(two_mul_diff, n));
+                    
+                    // Умножаем на входящий градиент, который нужно "разбросать" до нужной формы.
+                    let broadcasted_upstream_grad = self.grad_asg.add_node(None, NodeType::Broadcast(upstream_grad_id, imported_x));
+                    let final_grad = self.grad_asg.add_node(None, NodeType::Multiply(local_grad_unscaled, broadcasted_upstream_grad));
+
                     self.accumulate_grad(x_id, final_grad);
                 }
+                // --- КОНЕЦ ЗАМЕНЫ ---
+                
                 NodeType::ReLU(x_id) => {
                     let imported_x = self.import_node(x_id);
                     let zero = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(0.0f32).into_dyn())));
@@ -289,15 +305,11 @@ impl Gradients {
                     self.accumulate_grad(x_id, grad_x);
                 }
                 NodeType::Reshape(x_id, _shape_node_id) => {
-                    // --- НАЧАЛО ИСПРАВЛЕНИЯ ---
-                    // Градиент reshape - это reshape входящего градиента в исходную форму тензора 'x'.
-                    // 1. Получаем исходную форму 'x' из графа прямого прохода.
                     let x_shape = self.source_asg.get_node(x_id)?
                         .shape.as_ref()
                         .ok_or(AutogradError::MissingShapeInfo(x_id))?
                         .clone();
                     
-                    // 2. Создаем в графе градиентов новый узел-константу, который содержит эту форму.
                     let shape_data: Vec<f32> = x_shape.iter().map(|&dim| dim as f32).collect();
                     let shape_tensor = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[x_shape.len()]), shape_data)
                         .expect("Failed to create shape tensor");
@@ -306,10 +318,8 @@ impl Gradients {
                         NodeType::Literal(Value::Tensor(shape_tensor))
                     );
 
-                    // 3. Создаем узел Reshape, используя входящий градиент и новый узел с формой.
                     let grad_x = self.grad_asg.add_node(None, NodeType::Reshape(upstream_grad_id, new_shape_node_id));
                     self.accumulate_grad(x_id, grad_x);
-                    // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
                 }
                 NodeType::Sqrt(x_id) => {
                     let two = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(2.0f32).into_dyn())));
@@ -381,10 +391,17 @@ impl Gradients {
         if let Some(&grad_id) = self.grad_map.get(&node_id) {
             return grad_id;
         }
+
+        let source_node = self.source_asg.get_node(node_id).expect("Node not found in source graph for zero grad");
+        let shape = source_node.shape.as_ref().expect("Shape info missing for zero grad");
+
+        let zeros = ndarray::ArrayD::zeros(shape.clone());
+        
         let zero_grad_id = self.grad_asg.add_node(
-            None,
-            NodeType::Literal(Value::Tensor(ndarray::arr0(0.0f32).into_dyn())),
+            Some(format!("zero_grad_for_{}", node_id)),
+            NodeType::Literal(Value::Tensor(zeros)),
         );
+        
         self.grad_map.insert(node_id, zero_grad_id);
         zero_grad_id
     }
