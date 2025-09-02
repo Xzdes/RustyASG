@@ -113,11 +113,11 @@ impl Gradients {
                 }
                 NodeType::Variance(x_id) => {
                     let n_val = *self.source_asg.get_node(x_id)?.shape.as_ref().unwrap().last().unwrap_or(&1) as f32;
-                    let n = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(2.0 / n_val).into_dyn())));
                     let imported_x = self.import_node(x_id)?;
                     let mean_x = self.grad_asg.add_node(None, NodeType::Mean(imported_x));
                     let x_minus_mean = self.grad_asg.add_node(None, NodeType::Subtract(imported_x, mean_x));
-                    let term1 = self.grad_asg.add_node(None, NodeType::Multiply(x_minus_mean, n));
+                    let two_div_n = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(2.0 / n_val).into_dyn())));
+                    let term1 = self.grad_asg.add_node(None, NodeType::Multiply(x_minus_mean, two_div_n));
                     let broadcasted_grad = self.grad_asg.add_node(None, NodeType::Broadcast(upstream_grad_id, imported_x));
                     let final_grad = self.grad_asg.add_node(None, NodeType::Multiply(term1, broadcasted_grad));
                     self.accumulate_grad(x_id, final_grad);
