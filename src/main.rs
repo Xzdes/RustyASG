@@ -1,20 +1,21 @@
-// --- Файл: src/main.rs (финальная рабочая версия для замены) ---
+//! Главный исполняемый файл с правильной многопоточной архитектурой для GUI.
 
-//! Главный исполняемый файл, демонстрирующий полный цикл обучения
-//! с использованием графовой архитектуры и выбором бэкенда (CPU/GPU).
-
+// --- 1. Объявление модулей проекта ---
 mod analysis;
 mod asg;
 mod autograd;
+mod gui_viewer;
 mod losses;
 mod nn;
 mod optimizers;
 mod runtime;
 mod tensor;
 
+// --- 2. Импорт зависимостей ---
 use crate::analysis::shape_inference::ShapeInference;
 use crate::asg::{DType, NodeType, Shape, Value};
 use crate::autograd::Gradients;
+use crate::gui_viewer::GraphViewerApp;
 use crate::losses::mse_loss;
 use crate::nn::{Module, TransformerBlock};
 use crate::optimizers::{Optimizer, Sgd};
@@ -23,16 +24,67 @@ use crate::runtime::cpu_backend::CpuBackend;
 use crate::runtime::wgpu_backend::WgpuBackend;
 use crate::tensor::{GraphContext, Tensor};
 
+use clap::Parser;
+use eframe::egui;
 use ndarray::ArrayD;
 use ndarray_rand::rand_distr::Uniform;
 use ndarray_rand::RandomExt;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Instant;
 
-// --- Главная функция ---
-fn main() {
+/// Структура для парсинга аргументов командной строки
+#[derive(Parser, Debug)]
+#[command(author = "Xzdes", version, about = "RustyASG: A deep learning framework in Rust", long_about = None)]
+struct Args {
+    /// Включить нативную real-time визуализацию графа
+    #[arg(short, long)]
+    visualize: bool,
+}
+
+// --- 3. Главная функция ---
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
+    if args.visualize {
+        // --- ПУТЬ С ВИЗУАЛИЗАЦИЕЙ ---
+        let (tx, rx) = mpsc::channel();
+
+        // Запускаем тяжелые вычисления в фоновом потоке.
+        // `move` передает владение `tx` в этот поток.
+        thread::spawn(move || {
+            println!("[COMPUTATION] Запуск вычислительного потока...");
+            if let Err(e) = run_computation(Some(tx)) {
+                eprintln!("[COMPUTATION] Ошибка в вычислительном потоке: {}", e);
+            }
+        });
+
+        // Основной поток становится потоком GUI. Это блокирующая операция.
+        println!("[GUI] Запуск GUI в основном потоке...");
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
+            ..Default::default()
+        };
+        eframe::run_native(
+            "RustyASG - Визуализатор Графа",
+            options,
+            Box::new(|cc| Ok(Box::new(GraphViewerApp::new(cc, rx)))),
+        )?;
+    } else {
+        // --- ПУТЬ БЕЗ ВИЗУАЛИЗАЦИИ ---
+        // Просто выполняем вычисления в основном потоке, как и раньше.
+        run_computation(None)?;
+    }
+
+    Ok(())
+}
+
+/// Эта функция содержит всю логику построения графа и обучения.
+/// Она может быть вызвана как из основного, так и из фонового потока.
+fn run_computation(tx: Option<mpsc::Sender<asg::Asg>>) -> Result<(), Box<dyn std::error::Error>> {
     // --- Конфигурация ---
     let use_gpu = true; // <--- ПОМЕНЯЙТЕ НА `false` ДЛЯ ЗАПУСКА НА CPU
     let embed_dim = 4;
@@ -55,12 +107,12 @@ fn main() {
     forward_graph.set_output(loss.node_id);
     println!("\n[1] Граф прямого прохода успешно построен.");
 
-    // --- 2. Анализ Форм (Shape Inference) ---
+    // --- 2. Анализ Форм ---
     let mut initial_shapes = HashMap::new();
     initial_shapes.insert("input_data".to_string(), (vec![1, embed_dim], DType::F32));
     initial_shapes.insert("true_output".to_string(), (vec![1, embed_dim], DType::F32));
     for param in model.parameters() {
-        let name = context.borrow().main_graph().get_node(param.node_id).unwrap().name.clone().unwrap();
+        let name = context.borrow().main_graph().get_node(param.node_id)?.name.clone().unwrap();
         let shape: Shape = if name.contains("w_q.weights") || name.contains("w_k.weights") || name.contains("w_v.weights") || name.contains("w_o.weights") {
             vec![embed_dim, embed_dim]
         } else if name.contains("linear1.weights") {
@@ -70,19 +122,19 @@ fn main() {
         } else if name.contains("linear1.bias") {
             vec![1, ff_hidden_dim]
         } else {
-            vec![1, embed_dim] // Для всех остальных bias'ов и gamma/beta
+            vec![1, embed_dim]
         };
         initial_shapes.insert(name, (shape, DType::F32));
     }
 
-    ShapeInference::run(&mut forward_graph, &initial_shapes).expect("Shape inference для прямого графа провалился");
+    ShapeInference::run(&mut forward_graph, &initial_shapes)?;
     println!("[2] Анализ форм (Shape Inference) для прямого графа завершен.");
     
     // --- 3. Построение Графа Градиентов ---
     let param_tensors = model.parameters();
     let param_ids: Vec<_> = param_tensors.iter().map(|p| p.node_id).collect();
     let grad_generator = Gradients::new(forward_graph.clone());
-    let mut grad_graph = grad_generator.build(loss.node_id, &param_ids).unwrap();
+    let mut grad_graph = grad_generator.build(loss.node_id, &param_ids)?;
     
     // --- 4. Анализ Форм для Графа Градиентов ---
     let mut grad_initial_shapes = HashMap::new();
@@ -92,8 +144,14 @@ fn main() {
             grad_initial_shapes.insert(external_node_name, (shape.clone(), DType::F32));
         }
     }
-    ShapeInference::run(&mut grad_graph, &grad_initial_shapes).expect("Shape inference для графа градиентов провалился");
+    ShapeInference::run(&mut grad_graph, &grad_initial_shapes)?;
     println!("[3] Граф градиентов построен и проанализирован.");
+
+    // --- ОТПРАВКА ГРАФА В GUI-ПОТОК (если он существует) ---
+    if let Some(tx) = tx {
+        println!("\n[+] Отправка графа прямого прохода в окно визуализации...");
+        tx.send(forward_graph.clone())?;
+    }
 
     // --- 5. Инициализация Данных и Оптимизатора ---
     let mut runtime_data = HashMap::new();
@@ -121,10 +179,11 @@ fn main() {
         let backend = CpuBackend::new();
         run_training_loop(backend, forward_graph, grad_graph, runtime_data, param_tensors, optimizer);
     }
+    
+    Ok(())
 }
 
-
-// --- Универсальный Цикл Обучения ---
+/// Универсальный Цикл Обучения (без изменений)
 fn run_training_loop<B: Backend>(
     backend: B,
     forward_graph: asg::Asg,
@@ -143,7 +202,6 @@ fn run_training_loop<B: Backend>(
     let start_time = Instant::now();
 
     for epoch in 0..15 {
-        // 1. Загружаем данные на устройство (GPU или "CPU")
         let device_data = backend.load_data(&runtime_data).unwrap();
         
         let mut initial_memo: Memo<B::DeviceData> = HashMap::new();
@@ -157,26 +215,21 @@ fn run_training_loop<B: Backend>(
             }
         }
 
-        // 2. Выполняем прямой проход, ПОЛУЧАЕМ КЭШ
         let (loss_device_vec, forward_memo) = backend.run(&forward_graph, initial_memo).unwrap();
         let loss_value_vec = backend.retrieve_data(&loss_device_vec).unwrap();
         let loss_value = loss_value_vec.first().unwrap();
 
-        // 3. Выполняем обратный проход, ПЕРЕДАЕМ КЭШ от прямого прохода
         let (grad_device_vec, _grad_memo) = backend.run(&grad_graph, forward_memo).unwrap();
         let grad_value_vec = backend.retrieve_data(&grad_device_vec).unwrap();
         
-        // 4. Собираем градиенты в HashMap
         let mut computed_grads = HashMap::new();
         for (name, value) in param_names.iter().zip(grad_value_vec.into_iter()) {
             if name.contains("gamma") || name.contains("beta") { continue; }
             computed_grads.insert(name.clone(), value);
         }
 
-        // 5. Шаг оптимизатора (всегда на CPU)
         optimizer.step(&mut runtime_data, &computed_grads);
 
-        // 6. Печать лосса
         if let Value::Tensor(loss_tensor) = loss_value {
             println!("Эпоха: {:<2}, Потери (Loss): {:.6}", epoch + 1, loss_tensor.first().unwrap_or(&-1.0));
         }
