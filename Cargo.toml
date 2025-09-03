@@ -1,6 +1,6 @@
 [package]
 name = "rustyasg"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["Xzdes"]
 description = "A deep learning framework in Rust, focusing on an Abstract Semantic Graph (ASG) for autograd and Transformer architectures."
