@@ -188,8 +188,29 @@ fn op_relu(operand: Value) -> Result<Value, RuntimeError> { match operand { Valu
 fn op_sigmoid(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| 1.0 / (1.0 + (-x).exp())))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
 fn op_sum(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(ndarray::arr0(a.sum()).into_dyn())), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
 fn op_sqrt(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.sqrt()))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_mean(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mean_axis(Axis(a.ndim() - 1)).unwrap().into_dyn())), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_variance(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.var_axis(Axis(a.ndim() - 1), 0.0).into_dyn())), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+
+fn op_mean(operand: Value) -> Result<Value, RuntimeError> { 
+    match operand { 
+        Value::Tensor(a) => {
+            let axis = Axis(a.ndim() - 1);
+            let mean = a.mean_axis(axis).unwrap();
+            // Возвращаем удаленную ось с размером 1
+            Ok(Value::Tensor(mean.insert_axis(axis).into_dyn()))
+        }, 
+        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) 
+    } 
+}
+fn op_variance(operand: Value) -> Result<Value, RuntimeError> { 
+    match operand { 
+        Value::Tensor(a) => {
+            let axis = Axis(a.ndim() - 1);
+            let var = a.var_axis(axis, 0.0);
+            // Возвращаем удаленную ось с размером 1
+            Ok(Value::Tensor(var.insert_axis(axis).into_dyn()))
+        }, 
+        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) 
+    } 
+}
 fn op_power(base: Value, power: Value) -> Result<Value, RuntimeError> { match (base, power) { (Value::Tensor(a), Value::Tensor(b)) if b.ndim() == 0 => Ok(Value::Tensor(a.mapv(|val| val.powf(*b.first().unwrap())))), _ => Err(RuntimeError::TypeError { expected: "Tensor and Scalar Tensor".to_string(), actual: "Other".to_string() }) } }
 fn op_transpose(operand: Value, axis1: usize, axis2: usize) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => { let mut axes: Vec<_> = (0..a.ndim()).collect(); axes.swap(axis1, axis2); Ok(Value::Tensor(a.permuted_axes(axes))) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
 fn op_broadcast(source: Value, target: Value) -> Result<Value, RuntimeError> { match (source, target) { (Value::Tensor(s), Value::Tensor(t)) => Ok(Value::Tensor(ndarray::ArrayD::from_elem(t.shape(), *s.first().unwrap()))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }

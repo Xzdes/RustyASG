@@ -138,16 +138,15 @@ impl ShapeInference {
             }
 
             NodeType::Sum(_) => Ok((vec![], DType::F32)),
-            NodeType::Mean(id) | NodeType::Variance(id) => {
-                let (shape, dtype) = Self::get_shape_dtype(asg, *id)?;
-                if shape.is_empty() {
-                    Ok((vec![], dtype)) 
-                } else {
-                    let new_shape = shape[..shape.len() - 1].to_vec();
-                    Ok((new_shape, dtype))
-                }
-            }
-
+NodeType::Mean(id) | NodeType::Variance(id) => {
+    let (mut shape, dtype) = Self::get_shape_dtype(asg, *id)?;
+    // Не удаляем размерность, а устанавливаем ее в 1, чтобы сохранить ранг тензора
+    // для корректного broadcasting'а.
+    if !shape.is_empty() {
+        *shape.last_mut().unwrap() = 1;
+    }
+    Ok((shape, dtype))
+}
             NodeType::Transpose(id, axis1, axis2) => {
                 let (mut shape, dtype) = Self::get_shape_dtype(asg, *id)?;
                 if *axis1 >= shape.len() || *axis2 >= shape.len() {
