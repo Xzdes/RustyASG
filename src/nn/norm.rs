@@ -1,70 +1,45 @@
-// --- Файл: src/nn/norm.rs (финальная рабочая версия для замены) ---
+//  src/nn/norm.rs  (полностью исправленный)
+//! Layer-Normalisation для графовой архитектуры с корректным autograd.
 
-//! Модуль, реализующий слой нормализации (Layer Normalization) для графовой архитектуры.
-
-use crate::nn::module::Module;
+use crate::nn::Module;
 use crate::tensor::{GraphContext, Tensor};
 use ndarray::arr0;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Малая константа для численной стабильности при делении на стандартное отклонение.
-const EPSILON: f32 = 1e-5;
+/// Малая константа для численной стабильности.
+const EPS: f32 = 1e-5;
 
-/// Слой нормализации (Layer Normalization).
-///
-/// Нормализует активации по оси признаков (последней оси) для каждого элемента в батче.
-/// Имеет два обучаемых параметра: `gamma` (масштаб) и `beta` (сдвиг).
+/// Слой нормализации (LayerNorm) по последней оси.
 pub struct LayerNorm {
-    /// Обучаемый параметр масштабирования (gain). Инициализируется единицами.
-    pub gamma: Tensor,
-    /// Обучаемый параметр сдвига (bias). Инициализируется нулями.
-    pub beta: Tensor,
-    /// Малая константа для избежания деления на ноль, представленная как узел в графе.
-    pub epsilon: Tensor,
+    pub gamma: Tensor, // обучаемый масштаб
+    pub beta: Tensor,  // обучаемый сдвиг
+    eps: Tensor,       // константа-скаляр
 }
 
 impl LayerNorm {
-    /// Создает новый слой LayerNorm.
-    pub fn new(context: &Rc<RefCell<GraphContext>>, name: &str) -> Self {
+    /// Создаёт новый слой, регистрируя параметры `gamma` и `beta` в графе.
+    pub fn new(ctx: &Rc<RefCell<GraphContext>>, name: &str) -> Self {
         let gamma_name = format!("{}.gamma", name);
         let beta_name = format!("{}.beta", name);
-
-        let gamma = Tensor::new_parameter(context, &gamma_name);
-        let beta = Tensor::new_parameter(context, &beta_name);
-        
-        let epsilon = Tensor::new_literal(
-            context,
-            arr0(EPSILON).into_dyn(),
-            &format!("{}.epsilon", name),
-        );
-
-        Self {
-            gamma,
-            beta,
-            epsilon,
-        }
+        let gamma = Tensor::new_parameter(ctx, &gamma_name);
+        let beta = Tensor::new_parameter(ctx, &beta_name);
+        let eps = Tensor::new_literal(ctx, arr0(EPS).into_dyn(), &format!("{}.eps", name));
+        Self { gamma, beta, eps }
     }
 }
 
 impl Module for LayerNorm {
-    /// Выполняет прямой проход LayerNorm, строя канонический, численно стабильный подграф.
-    fn forward(&self, inputs: &Tensor) -> Tensor {
-        let mean = inputs.mean();
-        let variance = inputs.variance();
-
-        // Стандартная реализация: y = (x - mean) / sqrt(variance + epsilon)
-        let denominator = (&variance + &self.epsilon).sqrt();
-        let normalized = &(inputs - &mean) / &denominator;
-
-        // Применяем обучаемые параметры
-        let scaled = &normalized * &self.gamma;
-        let shifted = &scaled + &self.beta;
-
-        shifted
+    /// Прямой проход:  y = gamma * (x - mean) / sqrt(var + eps) + beta
+    fn forward(&self, x: &Tensor) -> Tensor {
+        let mean = x.mean();                              // [..., 1]
+        let var = x.variance();                           // [..., 1]
+        let denom = (&var + &self.eps).sqrt();            // [..., 1]
+        let normalized = &(x - &mean) / &denom;           // [..., C]
+        let scaled = &normalized * &self.gamma;           // [..., C]
+        &scaled + &self.beta                              // [..., C]
     }
 
-    /// Возвращает `gamma` и `beta` как обучаемые параметры.
     fn parameters(&self) -> Vec<Tensor> {
         vec![self.gamma.clone(), self.beta.clone()]
     }

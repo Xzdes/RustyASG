@@ -1,4 +1,5 @@
-//! Модуль, реализующий один блок кодировщика Трансформера для графовой архитектуры.
+//  src/nn/transformer.rs  (финальная версия — без заглушек)
+//! Один блок кодировщика Трансформера в графовой архитектуре.
 
 use crate::nn::{FeedForward, LayerNorm, Module, MultiHeadAttention};
 use crate::tensor::{GraphContext, Tensor};
@@ -18,7 +19,7 @@ impl TransformerBlock {
         context: &Rc<RefCell<GraphContext>>,
         embed_dim: usize,
         num_heads: usize,
-        _ff_hidden_dim: usize, // Больше не используется здесь, но может быть полезно для именования
+        _ff_hidden_dim: usize, // оставлено для совместимости вызова
         name: &str,
     ) -> Self {
         let attn_name = format!("{}.mha", name);
@@ -29,24 +30,24 @@ impl TransformerBlock {
         Self {
             attention: MultiHeadAttention::new(context, embed_dim, num_heads, &attn_name),
             norm1: LayerNorm::new(context, &norm1_name),
-            feed_forward: FeedForward::new(context, &ff_name), // Исправлено: убраны лишние аргументы
+            feed_forward: FeedForward::new(context, &ff_name),
             norm2: LayerNorm::new(context, &norm2_name),
         }
     }
 }
 
 impl Module for TransformerBlock {
+    /// Полный forward с остаточными связями и двумя LayerNorm.
     fn forward(&self, inputs: &Tensor) -> Tensor {
-        // Возвращаем полную архитектуру с LayerNorm и остаточными соединениями
-        let normed_inputs1 = self.norm1.forward(inputs);
-        let attention_output = self.attention.forward(&normed_inputs1);
-        let x = inputs + &attention_output;
+        let normed1 = self.norm1.forward(inputs);
+        let attn_out = self.attention.forward(&normed1);
+        let x = inputs + &attn_out;
 
-        let normed_inputs2 = self.norm2.forward(&x);
-        let ff_output = self.feed_forward.forward(&normed_inputs2);
-        let final_output = &x + &ff_output;
+        let normed2 = self.norm2.forward(&x);
+        let ff_out = self.feed_forward.forward(&normed2);
+        let final_out = &x + &ff_out;
 
-        final_output
+        final_out
     }
 
     fn parameters(&self) -> Vec<Tensor> {
