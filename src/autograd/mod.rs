@@ -41,7 +41,7 @@ impl Gradients {
         let one = self.lit_scalar(1.0);
         self.map.insert(loss, one);
 
-        // 3. Обратный проход
+        // 3. Обратный проход для построения основного графа градиентов
         for &node in order.iter().rev() {
             if !self.map.contains_key(&node) {
                 continue;
@@ -49,23 +49,43 @@ impl Gradients {
             let g_out = self.map[&node];
             self.backward_node(node, g_out)?;
         }
-
-        // 4. Собрать выходы
-        let outs: Vec<_> = wrt
-            .iter()
-            .map(|&n| self.get_or_zero(n))
-            .collect::<Result<_, _>>()?;
-        self.grad.set_outputs(outs);
-
-        // 5. Shape inference для grad-графа
-        let mut shapes = HashMap::new();
+        
+        // 4. Запускаем ShapeInference ОДИН РАЗ, когда граф почти готов.
+        let mut initial_shapes = HashMap::new();
         for n in self.src.nodes.values() {
             if let (Some(s), Some(dt)) = (&n.shape, &n.dtype) {
                 let ext_name = self.ext_name(n.id);
-                shapes.insert(ext_name, (s.clone(), *dt));
+                initial_shapes.insert(ext_name, (s.clone(), *dt));
             }
         }
-        ShapeInference::run(&mut self.grad, &shapes)?;
+        // Устанавливаем временные выходы, чтобы shape inference мог отработать
+        self.grad.set_outputs(self.map.values().copied().collect());
+        ShapeInference::run(&mut self.grad, &initial_shapes)?;
+
+        // 5. Корректируем градиенты для broadcast-операций, добавляя ReduceSumTo
+        for &wrt_id in wrt {
+            if let Some(&grad_id) = self.map.get(&wrt_id) {
+                let grad_shape = self.grad.get_node(grad_id)?.shape.as_ref().unwrap();
+                let param_shape = self.src.get_node(wrt_id)?.shape.as_ref().unwrap();
+
+                if grad_shape != param_shape {
+                    let param_as_external = self.import(wrt_id)?;
+                    let final_grad = self.grad.add_node(None, NodeType::ReduceSumTo(grad_id, param_as_external));
+                    self.map.insert(wrt_id, final_grad);
+                }
+            }
+        }
+        
+        // 6. Собираем финальные выходы
+        let final_outputs: Vec<_> = wrt
+            .iter()
+            .map(|&n| self.get_or_zero(n))
+            .collect::<Result<_, _>>()?;
+        self.grad.set_outputs(final_outputs);
+
+        // 7. Запускаем ShapeInference в последний раз, чтобы обработать новые узлы ReduceSumTo
+        ShapeInference::run(&mut self.grad, &initial_shapes)?;
+
         Ok(self.grad)
     }
 
@@ -83,10 +103,12 @@ impl Gradients {
 
     /// Импортировать узел из src как External в grad.
     fn import(&mut self, src_id: NodeId) -> Result<NodeId, AutogradError> {
-        if let Some(&g) = self.map.get(&src_id) {
-            return Ok(g);
-        }
         let name = self.ext_name(src_id);
+        // Проверяем, может уже импортировали узел с таким именем
+        if let Some(node) = self.grad.nodes.values().find(|n| n.name.as_deref() == Some(&name)) {
+            return Ok(node.id);
+        }
+
         let node = self.src.get_node(src_id)?;
         let new_id = self.grad.add_node(
             Some(name.clone()),
@@ -127,7 +149,7 @@ impl Gradients {
         Ok(id)
     }
 
-    /// Добавить `delta` к существующему градиенту узла `src_id`.
+    /// Простая функция аккумуляции градиента. Проверка на broadcast вынесена.
     fn acc(&mut self, src_id: NodeId, delta: NodeId) -> Result<(), AutogradError> {
         let current_grad = self.map.get(&src_id).copied();
         let new_grad = if let Some(g) = current_grad {
@@ -150,7 +172,6 @@ impl Gradients {
             
             // ---------- БИНАРНЫЕ ОПЕРАЦИИ ----------
             NodeType::Add(a, b) => {
-                // ПРИМЕЧАНИЕ: Это не обрабатывает broadcasting корректно.
                 self.acc(*a, g_out)?;
                 self.acc(*b, g_out)?;
             }
@@ -303,7 +324,8 @@ fn inputs_of(nt: &NodeType) -> Vec<NodeId> {
         | NodeType::GreaterThan(a, b)
         | NodeType::Power(a, b)
         | NodeType::Broadcast(a, b)
-        | NodeType::Reshape(a, b) => vec![*a, *b],
+        | NodeType::Reshape(a, b) 
+        | NodeType::ReduceSumTo(a, b) => vec![*a, *b],
 
         NodeType::ReLU(a)
         | NodeType::Sum(a)

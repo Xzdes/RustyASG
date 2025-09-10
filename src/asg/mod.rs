@@ -139,6 +139,9 @@ pub enum NodeType {
     /// Транслирует (broadcasts) первый тензор (скаляр) до формы второго тензора.
     /// Используется в основном в графе градиентов, например для grad(Sum).
     Broadcast(NodeId, NodeId),
+    /// Суммирует тензор `source` так, чтобы его форма совпала с формой тензора `target_shape_provider`.
+    /// Используется в autograd для градиентов от broadcast-операций.
+    ReduceSumTo(NodeId, NodeId),
 
         MaxPool2d {
         /// Входной тензор, обычно формы [N, C, H, W].

@@ -182,6 +182,12 @@ NodeType::Mean(id) | NodeType::Variance(id) => {
                 Ok((out_shape, DType::F32)) // Возвращает 0.0 или 1.0, так что F32
             }
 
+            NodeType::ReduceSumTo(source_id, target_shape_provider_id) => {
+                let (_, dtype) = Self::get_shape_dtype(asg, *source_id)?;
+                let (target_shape, _) = Self::get_shape_dtype(asg, *target_shape_provider_id)?;
+                Ok((target_shape, dtype))
+            }
+
 NodeType::MaxPool2d { input, kernel_size, stride } => {
     let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
 
@@ -271,7 +277,8 @@ NodeType::MaxPool2d { input, kernel_size, stride } => {
             | NodeType::GreaterThan(a, b)
             | NodeType::Power(a, b)
             | NodeType::Broadcast(a, b)
-            | NodeType::Reshape(a, b) => vec![*a, *b],
+            | NodeType::Reshape(a, b) 
+            | NodeType::ReduceSumTo(a, b) => vec![*a, *b],
 
             NodeType::ReLU(a)
             | NodeType::Sum(a)

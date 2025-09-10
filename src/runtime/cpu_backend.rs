@@ -64,7 +64,7 @@ impl<'a> ExecutionContext<'a> {
             // Бинарные операции
             NodeType::Add(l, r) | NodeType::Subtract(l, r) | NodeType::Multiply(l, r) | NodeType::Divide(l, r) |
             NodeType::MatrixMultiply(l, r) | NodeType::GreaterThan(l, r) | NodeType::Power(l, r) |
-            NodeType::Reshape(l, r) | NodeType::Broadcast(l, r) => {
+            NodeType::Reshape(l, r) | NodeType::Broadcast(l, r) | NodeType::ReduceSumTo(l, r) => {
                 let lhs = self.evaluate_node(asg_id, *l)?;
                 let rhs = self.evaluate_node(asg_id, *r)?;
                 match &node.node_type {
@@ -77,6 +77,7 @@ impl<'a> ExecutionContext<'a> {
                     NodeType::Power(_, _) => op_power(lhs, rhs),
                     NodeType::Reshape(_, _) => op_reshape(lhs, rhs),
                     NodeType::Broadcast(_, _) => op_broadcast(lhs, rhs),
+                    NodeType::ReduceSumTo(_, _) => op_reduce_sum_to(lhs, rhs),
                     _ => unreachable!(),
                 }
             }
@@ -290,7 +291,6 @@ fn op_max_unpool2d(
     kernel_size: (usize, usize),
     stride: (usize, usize),
 ) -> Result<Value, RuntimeError> {
-    // --- НАЧАЛО ИСПРАВЛЕНИЯ ---
     let grad_tensor = match operand {
         Value::Tensor(val) => val.into_dimensionality::<ndarray::Ix4>().map_err(|e| RuntimeError::ShapeError(e.to_string()))?,
         _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
@@ -299,7 +299,6 @@ fn op_max_unpool2d(
         Value::Tensor(val) => val.into_dimensionality::<ndarray::Ix4>().map_err(|e| RuntimeError::ShapeError(e.to_string()))?,
         _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
     };
-    // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
     let (_n, _c, h, w) = original_tensor.dim();
     let (kh, kw) = kernel_size;
@@ -338,4 +337,47 @@ fn op_max_unpool2d(
         }
     }
     Ok(Value::Tensor(output_arr.into_dyn()))
+}
+
+fn op_reduce_sum_to(source: Value, target_shape_provider: Value) -> Result<Value, RuntimeError> {
+    let mut source_tensor = match source {
+        Value::Tensor(val) => val,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
+    };
+    let target_shape = match target_shape_provider {
+        Value::Tensor(val) => val.shape().to_vec(),
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
+    };
+
+    let source_rank = source_tensor.ndim();
+    let target_rank = target_shape.len();
+    
+    // Шаг 1: Суммируем ведущие оси, чтобы выровнять ранг.
+    if source_rank > target_rank {
+        let rank_diff = source_rank - target_rank;
+        for i in 0..rank_diff {
+             // Суммируем по оси 0, пока ранг не совпадет.
+            source_tensor = source_tensor.sum_axis(Axis(0));
+        }
+    }
+    
+    // Шаг 2: Суммируем оси, где размерность target равна 1.
+    let mut axes_to_sum = Vec::new();
+    let current_shape = source_tensor.shape();
+    for i in 0..target_rank {
+        if target_shape[i] == 1 && current_shape[i] > 1 {
+            axes_to_sum.push(i);
+        }
+    }
+    
+    // Суммируем в обратном порядке, чтобы индексы осей оставались корректными.
+    for &axis in axes_to_sum.iter().rev() {
+        source_tensor = source_tensor.sum_axis(Axis(axis));
+    }
+    
+    // Шаг 3: Финальное изменение формы, чтобы она точно соответствовала целевой.
+    source_tensor
+        .into_shape(target_shape.as_slice())
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))
+        .map(Value::Tensor)
 }
