@@ -144,6 +144,7 @@ impl Gradients {
         }
         self.grad_asg.set_outputs(final_outputs);
         
+        // Запускаем ShapeInference один раз в самом конце, после построения всего графа.
         let mut initial_shapes_for_grad = HashMap::new();
         for node in self.source_asg.nodes.values() {
             if let (Some(shape), Some(dtype)) = (&node.shape, &node.dtype) {
@@ -155,34 +156,13 @@ impl Gradients {
         Ok(self.grad_asg)
     }
 
+    /// **ФИНАЛЬНАЯ ВЕРСИЯ**
     fn accumulate_grad(&mut self, node_id: NodeId, grad_to_add: NodeId) -> Result<(), AutogradError> {
-        // Запускаем ShapeInference для текущего состояния графа градиентов, чтобы получить форму grad_to_add
-        let mut temp_initial_shapes = HashMap::new();
-         for node in self.source_asg.nodes.values() {
-            if let (Some(shape), Some(dtype)) = (&node.shape, &node.dtype) {
-                 temp_initial_shapes.insert(format!("external_{}_{}", self.source_asg.id, node.id), (shape.clone(), *dtype));
-            }
-        }
-        ShapeInference::run(&mut self.grad_asg, &temp_initial_shapes)?;
-
-        let grad_shape = self.grad_asg.get_node(grad_to_add)?.shape.as_ref().cloned();
-        let param_shape = self.source_asg.get_node(node_id)?.shape.as_ref().cloned();
-
-        let mut final_grad_to_add = grad_to_add;
-
-        if let (Some(gs), Some(ps)) = (grad_shape, param_shape) {
-            if gs != ps {
-                // Если формы не совпадают, значит было расширение (broadcasting)
-                // и нам нужно свернуть (просуммировать) градиент по всем осям.
-                final_grad_to_add = self.grad_asg.add_node(None, NodeType::Sum(grad_to_add));
-            }
-        }
-
-        if let Some(&existing_grad) = self.grad_map.get(&node_id) {
-            let new_grad = self.grad_asg.add_node(None, NodeType::Add(existing_grad, final_grad_to_add));
-            self.grad_map.insert(node_id, new_grad);
-        } else {
-            self.grad_map.insert(node_id, final_grad_to_add);
+        let entry = self.grad_map.entry(node_id).or_insert(grad_to_add);
+        if *entry != grad_to_add {
+            // Если градиент уже существует, добавляем новый к старому.
+            let new_grad = self.grad_asg.add_node(None, NodeType::Add(*entry, grad_to_add));
+            *entry = new_grad;
         }
         Ok(())
     }
