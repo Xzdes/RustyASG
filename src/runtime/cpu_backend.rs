@@ -248,46 +248,33 @@ fn op_max_pool2d(
         _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
     };
 
-    // Преобразуем в Array4 для удобства, ожидая [N, C, H, W]
     let input_arr: Array4<f32> = input_tensor.into_dimensionality().map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
-
     let (n, c, h, w) = input_arr.dim();
     let (kh, kw) = kernel_size;
     let (sh, sw) = stride;
-
     let out_h = (h - kh) / sh + 1;
     let out_w = (w - kw) / sw + 1;
-
     let mut output_arr = Array4::<f32>::zeros((n, c, out_h, out_w));
 
-    // Проходим по каждому элементу батча и каждому каналу
     for n_idx in 0..n {
         for c_idx in 0..c {
-            // Проходим по выходному тензору, чтобы заполнить его
             for oh_idx in 0..out_h {
                 for ow_idx in 0..out_w {
                     let h_start = oh_idx * sh;
                     let w_start = ow_idx * sw;
-
-                    // Вырезаем окно из входного тензора
                     let window = input_arr.slice(s![n_idx, c_idx, h_start..h_start + kh, w_start..w_start + kw]);
-                    
-                    // Находим максимальное значение в окне
                     let max_val = window.iter().fold(f32::NEG_INFINITY, |max, &val| max.max(val));
-                    
                     output_arr[[n_idx, c_idx, oh_idx, ow_idx]] = max_val;
                 }
             }
         }
     }
-
-    // Преобразуем результат обратно в ArrayD<f32>
     Ok(Value::Tensor(output_arr.into_dyn()))
 }
 
 fn op_max_unpool2d(
-    operand: Value, // Входящий градиент (маленький тензор)
-    original_input: Value, // Исходный вход (большой тензор)
+    operand: Value,
+    original_input: Value,
     kernel_size: (usize, usize),
     stride: (usize, usize),
 ) -> Result<Value, RuntimeError> {
@@ -303,22 +290,17 @@ fn op_max_unpool2d(
     let (_n, _c, h, w) = original_tensor.dim();
     let (kh, kw) = kernel_size;
     let (sh, sw) = stride;
-
     let mut output_arr = Array4::<f32>::zeros((_n, _c, h, w));
 
-    // Проходим по маленькому тензору градиентов
     for n_idx in 0..grad_tensor.dim().0 {
         for c_idx in 0..grad_tensor.dim().1 {
             for oh_idx in 0..grad_tensor.dim().2 {
                 for ow_idx in 0..grad_tensor.dim().3 {
                     let h_start = oh_idx * sh;
                     let w_start = ow_idx * sw;
-                    
-                    // Вырезаем окно из ИСХОДНОГО тензора
                     let window = original_tensor.slice(s![n_idx, c_idx, h_start..h_start + kh, w_start..w_start + kw]);
                     let grad_val = grad_tensor[[n_idx, c_idx, oh_idx, ow_idx]];
                     
-                    // Находим позицию максимума в этом окне
                     let mut max_val = f32::NEG_INFINITY;
                     let mut max_pos = (0, 0);
                     for r in 0..kh {
@@ -329,8 +311,6 @@ fn op_max_unpool2d(
                             }
                         }
                     }
-                    
-                    // Помещаем градиент ТОЛЬКО в эту позицию в выходном (большом) тензоре
                     output_arr[[n_idx, c_idx, h_start + max_pos.0, w_start + max_pos.1]] += grad_val;
                 }
             }
@@ -355,8 +335,7 @@ fn op_reduce_sum_to(source: Value, target_shape_provider: Value) -> Result<Value
     // Шаг 1: Суммируем ведущие оси, чтобы выровнять ранг.
     if source_rank > target_rank {
         let rank_diff = source_rank - target_rank;
-        for i in 0..rank_diff {
-             // Суммируем по оси 0, пока ранг не совпадет.
+        for _ in 0..rank_diff {
             source_tensor = source_tensor.sum_axis(Axis(0));
         }
     }
@@ -364,13 +343,13 @@ fn op_reduce_sum_to(source: Value, target_shape_provider: Value) -> Result<Value
     // Шаг 2: Суммируем оси, где размерность target равна 1.
     let mut axes_to_sum = Vec::new();
     let current_shape = source_tensor.shape();
+    let rank_diff = current_shape.len() - target_rank;
     for i in 0..target_rank {
-        if target_shape[i] == 1 && current_shape[i] > 1 {
-            axes_to_sum.push(i);
+        if target_shape[i] == 1 && current_shape[i + rank_diff] > 1 {
+            axes_to_sum.push(i + rank_diff);
         }
     }
     
-    // Суммируем в обратном порядке, чтобы индексы осей оставались корректными.
     for &axis in axes_to_sum.iter().rev() {
         source_tensor = source_tensor.sum_axis(Axis(axis));
     }

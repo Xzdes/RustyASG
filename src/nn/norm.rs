@@ -31,13 +31,20 @@ impl LayerNorm {
 
 impl Module for LayerNorm {
     /// Прямой проход:  y = gamma * (x - mean) / sqrt(var + eps) + beta
+    /// РАЗЛОЖЕН на простые операции для корректной работы autograd.
     fn forward(&self, x: &Tensor) -> Tensor {
-        let mean = x.mean();                              // [..., 1]
-        let var = x.variance();                           // [..., 1]
-        let denom = (&var + &self.eps).sqrt();            // [..., 1]
-        let normalized = &(x - &mean) / &denom;           // [..., C]
-        let scaled = &normalized * &self.gamma;           // [..., C]
-        &scaled + &self.beta                              // [..., C]
+        let mean = x.mean();
+        let x_minus_mean = x - &mean;
+        
+        // Вычисляем variance как E[(x - E[x])^2]
+        let squared_error = &x_minus_mean * &x_minus_mean;
+        let variance = squared_error.mean();
+        
+        let denominator = (&variance + &self.eps).sqrt();
+        let normalized = &x_minus_mean / &denominator;
+        
+        let scaled = &normalized * &self.gamma;
+        &scaled + &self.beta
     }
 
     fn parameters(&self) -> Vec<Tensor> {

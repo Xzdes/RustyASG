@@ -58,14 +58,14 @@ impl Gradients {
                 initial_shapes.insert(ext_name, (s.clone(), *dt));
             }
         }
-        // Устанавливаем временные выходы, чтобы shape inference мог отработать
         self.grad.set_outputs(self.map.values().copied().collect());
         ShapeInference::run(&mut self.grad, &initial_shapes)?;
 
         // 5. Корректируем градиенты для broadcast-операций, добавляя ReduceSumTo
         for &wrt_id in wrt {
-            if let Some(&grad_id) = self.map.get(&wrt_id) {
-                let grad_shape = self.grad.get_node(grad_id)?.shape.as_ref().unwrap();
+             if let Some(&grad_id) = self.map.get(&wrt_id) {
+                let grad_node = self.grad.get_node(grad_id)?.clone();
+                let grad_shape = grad_node.shape.as_ref().unwrap();
                 let param_shape = self.src.get_node(wrt_id)?.shape.as_ref().unwrap();
 
                 if grad_shape != param_shape {
@@ -104,7 +104,6 @@ impl Gradients {
     /// Импортировать узел из src как External в grad.
     fn import(&mut self, src_id: NodeId) -> Result<NodeId, AutogradError> {
         let name = self.ext_name(src_id);
-        // Проверяем, может уже импортировали узел с таким именем
         if let Some(node) = self.grad.nodes.values().find(|n| n.name.as_deref() == Some(&name)) {
             return Ok(node.id);
         }
@@ -118,11 +117,9 @@ impl Gradients {
                 source_node_id: src_id,
             },
         );
-        {
-            let n = self.grad.get_node_mut(new_id)?;
-            n.shape = node.shape.clone();
-            n.dtype = node.dtype;
-        }
+        let n = self.grad.get_node_mut(new_id)?;
+        n.shape = node.shape.clone();
+        n.dtype = node.dtype;
         Ok(new_id)
     }
 
@@ -165,12 +162,8 @@ impl Gradients {
     fn backward_node(&mut self, node: NodeId, g_out: NodeId) -> Result<(), AutogradError> {
         let n = self.src.get_node(node)?.clone();
         match &n.node_type {
-            // ---------- ЛИСТОВЫЕ УЗЛЫ ----------
-            NodeType::Input {..} | NodeType::Parameter { .. } | NodeType::Literal(_) | NodeType::External {..} => {
-                // Градиент не течёт дальше.
-            }
+            NodeType::Input {..} | NodeType::Parameter { .. } | NodeType::Literal(_) | NodeType::External {..} => {}
             
-            // ---------- БИНАРНЫЕ ОПЕРАЦИИ ----------
             NodeType::Add(a, b) => {
                 self.acc(*a, g_out)?;
                 self.acc(*b, g_out)?;
@@ -208,18 +201,13 @@ impl Gradients {
                 let b_shape = self.src.get_node(*b)?.shape.as_ref().unwrap();
                 let a_rank = a_shape.len();
                 let b_rank = b_shape.len();
-
                 let b_t = self.grad.add_node(None, NodeType::Transpose(b_node, b_rank - 2, b_rank - 1));
                 let g_a = self.grad.add_node(None, NodeType::MatrixMultiply(g_out, b_t));
-
                 let a_t = self.grad.add_node(None, NodeType::Transpose(a_node, a_rank - 2, a_rank - 1));
                 let g_b = self.grad.add_node(None, NodeType::MatrixMultiply(a_t, g_out));
-                
                 self.acc(*a, g_a)?;
                 self.acc(*b, g_b)?;
             }
-
-            // ---------- УНАРНЫЕ ОПЕРАЦИИ ----------
             NodeType::Mean(x) => {
                 let shape = self.src.get_node(*x)?.shape.as_ref().unwrap();
                 let n = *shape.last().unwrap_or(&1) as f32;
@@ -229,21 +217,12 @@ impl Gradients {
                 let g_x = self.grad.add_node(None, NodeType::Multiply(g_bcast, scale));
                 self.acc(*x, g_x)?;
             }
-            NodeType::Variance(x) => {
-                let shape = self.src.get_node(*x)?.shape.as_ref().unwrap();
-                let n = *shape.last().unwrap_or(&1) as f32;
-                let two_n = self.lit_scalar(2.0 / n);
-                let x_node = self.import(*x)?;
-                let mean_node = self.src.nodes.values().find(|n| matches!(n.node_type, NodeType::Mean(y) if y == *x)).unwrap();
-                let mean = self.import(mean_node.id)?;
-                let diff = self.grad.add_node(None, NodeType::Subtract(x_node, mean));
-                let local = self.grad.add_node(None, NodeType::Multiply(two_n, diff));
-                let g_bcast = self.grad.add_node(None, NodeType::Broadcast(g_out, x_node));
-                let g_x = self.grad.add_node(None, NodeType::Multiply(g_bcast, local));
-                self.acc(*x, g_x)?;
+            // УДАЛЕНО: специальная обработка Variance больше не нужна
+            NodeType::Variance(_) => {
+                 return Err(AutogradError::Asg(AsgError::InputNotFound("Variance autograd is handled by decomposition".to_string())));
             }
             NodeType::Sqrt(x) => {
-                let sqrt_x = self.import(node)?; // import self (sqrt(x))
+                let sqrt_x = self.import(node)?;
                 let half = self.lit_scalar(0.5);
                 let num = self.grad.add_node(None, NodeType::Multiply(half, g_out));
                 let g_x = self.grad.add_node(None, NodeType::Divide(num, sqrt_x));
@@ -270,8 +249,6 @@ impl Gradients {
                 let g_x = self.grad.add_node(None, NodeType::Multiply(sub, s));
                 self.acc(*x, g_x)?;
             }
-
-            // ---------- ТРАНСФОРМАЦИИ ----------
             NodeType::Transpose(x, ax1, ax2) => {
                 let g_x = self.grad.add_node(None, NodeType::Transpose(g_out, *ax1, *ax2));
                 self.acc(*x, g_x)?;
@@ -279,16 +256,13 @@ impl Gradients {
             NodeType::Reshape(data, _) => {
                 let data_node_src = self.src.get_node(*data)?;
                 let original_shape = data_node_src.shape.as_ref().unwrap();
-
                 let shape_data_f32: Vec<f32> = original_shape.iter().map(|&d| d as f32).collect();
                 let shape_array = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[original_shape.len()]), shape_data_f32).unwrap();
                 let shape_node_grad = self.grad.add_node(None, NodeType::Literal(Value::Tensor(shape_array)));
-                
                 let g_x = self.grad.add_node(None, NodeType::Reshape(g_out, shape_node_grad));
                 self.acc(*data, g_x)?;
             }
-
-            _ => { /* остальные узлы пока не реализованы */ }
+            _ => {}
         }
         Ok(())
     }
@@ -313,33 +287,16 @@ impl Gradients {
     }
 }
 
-/// Список всех входных NodeId для данного NodeType.
 fn inputs_of(nt: &NodeType) -> Vec<NodeId> {
     match nt {
-        NodeType::Add(a, b)
-        | NodeType::Subtract(a, b)
-        | NodeType::Multiply(a, b)
-        | NodeType::Divide(a, b)
-        | NodeType::MatrixMultiply(a, b)
-        | NodeType::GreaterThan(a, b)
-        | NodeType::Power(a, b)
-        | NodeType::Broadcast(a, b)
-        | NodeType::Reshape(a, b) 
-        | NodeType::ReduceSumTo(a, b) => vec![*a, *b],
-
-        NodeType::ReLU(a)
-        | NodeType::Sum(a)
-        | NodeType::Sigmoid(a)
-        | NodeType::Softmax(a)
-        | NodeType::Mean(a)
-        | NodeType::Variance(a)
-        | NodeType::Sqrt(a)
-        | NodeType::Log(a)
+        NodeType::Add(a, b)|NodeType::Subtract(a, b)|NodeType::Multiply(a, b)|NodeType::Divide(a, b)
+        | NodeType::MatrixMultiply(a, b)|NodeType::GreaterThan(a, b)|NodeType::Power(a, b)
+        | NodeType::Broadcast(a, b)|NodeType::Reshape(a, b)|NodeType::ReduceSumTo(a, b) => vec![*a, *b],
+        NodeType::ReLU(a)|NodeType::Sum(a)|NodeType::Sigmoid(a)|NodeType::Softmax(a)
+        | NodeType::Mean(a)|NodeType::Variance(a)|NodeType::Sqrt(a)|NodeType::Log(a)
         | NodeType::Transpose(a, ..) => vec![*a],
-
         NodeType::MaxPool2d { input, .. } => vec![*input],
         NodeType::MaxUnpool2d { input, original_input, .. } => vec![*input, *original_input],
-
         _ => vec![],
     }
 }
