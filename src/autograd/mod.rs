@@ -158,11 +158,12 @@ impl Gradients {
 
     /// **ФИНАЛЬНАЯ ВЕРСИЯ**
     fn accumulate_grad(&mut self, node_id: NodeId, grad_to_add: NodeId) -> Result<(), AutogradError> {
+        // Эта функция просто добавляет градиент.
+        // Логика по обработке broadcasting теперь находится внутри формул производных.
         let entry = self.grad_map.entry(node_id).or_insert(grad_to_add);
         if *entry != grad_to_add {
             // Если градиент уже существует, добавляем новый к старому.
-            let new_grad = self.grad_asg.add_node(None, NodeType::Add(*entry, grad_to_add));
-            *entry = new_grad;
+            *entry = self.grad_asg.add_node(None, NodeType::Add(*entry, grad_to_add));
         }
         Ok(())
     }
