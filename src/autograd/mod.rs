@@ -61,39 +61,39 @@ impl Gradients {
 
         let mut current_grad_id = grad_id;
         let mut current_shape = grad_shape.clone();
-        
+
         // Шаг 1: Суммируем по осям, которые были добавлены спереди (например, [B, D] -> [D])
         let rank_diff = current_shape.len().saturating_sub(target_shape.len());
         if rank_diff > 0 {
             for _ in 0..rank_diff {
                 current_grad_id = self.grad_asg.add_node(None, NodeType::Sum(current_grad_id));
+                current_shape.remove(0);
             }
         }
-        
+
         // Шаг 2: Суммируем по осям, которые были расширены с 1 (например, [B, D] -> [B, 1])
         let mut axes_to_sum = Vec::new();
-        let current_rank = grad_shape.len();
-        let target_rank_start = current_rank.saturating_sub(target_shape.len());
-
         for (i, target_dim) in target_shape.iter().enumerate() {
-            let current_dim_idx = target_rank_start + i;
-            if *target_dim == 1 && grad_shape[current_dim_idx] > 1 {
-                axes_to_sum.push(current_dim_idx);
+            if *target_dim == 1 && current_shape[i] > 1 {
+                axes_to_sum.push(i);
             }
         }
 
         for axis in axes_to_sum {
-             current_grad_id = self.grad_asg.add_node(None, NodeType::Sum(current_grad_id));
+            let n = current_shape[axis] as f32;
+            let rank = current_shape.len();
+            
+            // Сумма = Mean * N. `Mean` работает по последней оси, поэтому сначала транспонируем.
+            let transposed_id = self.grad_asg.add_node(None, NodeType::Transpose(current_grad_id, axis, rank - 1));
+            let mean_id = self.grad_asg.add_node(None, NodeType::Mean(transposed_id));
+            let n_const_id = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(n).into_dyn())));
+            
+            current_grad_id = self.grad_asg.add_node(None, NodeType::Multiply(mean_id, n_const_id));
+            
+            // Обновляем форму после суммирования по оси
+            current_shape[axis] = 1;
         }
 
-        // Финальный reshape, если нужно
-        // Мы не можем здесь проверить shape, так как он еще не выведен.
-        // Но `ShapeInference` позже сам все проверит.
-        let shape_vec: Vec<f32> = target_shape.iter().map(|&d| d as f32).collect();
-        let shape_tensor = Value::Tensor(ndarray::Array::from(shape_vec).into_dyn());
-        let shape_node_id = self.grad_asg.add_node(None, NodeType::Literal(shape_tensor));
-        current_grad_id = self.grad_asg.add_node(None, NodeType::Reshape(current_grad_id, shape_node_id));
-        
         Ok(current_grad_id)
     }
 
