@@ -8,7 +8,7 @@ use rustyasg::autograd::Gradients;
 use rustyasg::runtime::backend::{Backend, Memo};
 use rustyasg::runtime::cpu_backend::CpuBackend;
 use rustyasg::tensor::{GraphContext, Tensor};
-use rustyasg::nn::LayerNorm;
+use rustyasg::nn::{LayerNorm, Module};
 
 use ndarray::ArrayD;
 use std::cell::RefCell;
@@ -153,24 +153,22 @@ impl GradChecker {
 fn test_grad_layernorm() {
     // Определяем функцию построения графа
     // Используем `move`, чтобы контекст переместился ВНУТРЬ замыкания.
-    let layernorm_fn = move |inputs: &HashMap<String, Tensor>| {
-        // Контекст теперь создается и живет внутри каждого вызова замыкания.
-        // Это гарантирует, что у каждого графа свой независимый контекст.
-        let context = inputs.values().next().unwrap().context.clone();
+let layernorm_fn = move |inputs: &HashMap<String, Tensor>| {
+    let context = inputs.values().next().unwrap().context.clone();
 
-        let x = inputs.get("x").unwrap();
-        let gamma = inputs.get("gamma").unwrap();
-        let beta = inputs.get("beta").unwrap();
-        
-        // Используем реальный слой LayerNorm, но с внешними параметрами
-        let ln_module = LayerNorm::new(&context, "test_ln");
-        let normalized = (x - &x.mean()) / &((&x.variance() + &ln_module.epsilon).sqrt() + &ln_module.epsilon);
-        let scaled = &normalized * gamma;
-        let shifted = &scaled + beta;
+    let x = inputs.get("x").unwrap();
+    
+    // Создаем модуль LayerNorm и используем его параметры ИЗ ТЕСТА
+    let mut ln_module = LayerNorm::new(&context, "test_ln");
+    ln_module.gamma = inputs.get("gamma").unwrap().clone();
+    ln_module.beta = inputs.get("beta").unwrap().clone();
+    
+    // Вызываем НАСТОЯЩИЙ forward pass
+    let final_output = ln_module.forward(x);
 
-        // Возвращаем скаляр для проверки градиента
-        shifted.sum()
-    };
+    // Суммируем для получения скаляра
+    final_output.sum()
+};
 
     // Определяем входные данные
     let initial_values = HashMap::from([

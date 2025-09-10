@@ -48,27 +48,16 @@ impl LayerNorm {
 }
 
 impl Module for LayerNorm {
-    /// Выполняет прямой проход LayerNorm, строя численно стабильный подграф.
+    /// Выполняет прямой проход LayerNorm, строя канонический, численно стабильный подграф.
     fn forward(&self, inputs: &Tensor) -> Tensor {
         let mean = inputs.mean();
         let variance = inputs.variance();
 
-        // Шаг 1: Используем relu(), чтобы гарантировать, что дисперсия не будет отрицательной
-        // из-за ошибок округления.
-        let non_negative_variance = variance.relu();
+        // Стандартная реализация: y = (x - mean) / sqrt(variance + epsilon)
+        let denominator = (&variance + &self.epsilon).sqrt();
+        let normalized = &(inputs - &mean) / &denominator;
 
-        // Шаг 2: Извлекаем корень. Эпсилон здесь защищает от sqrt(0).
-        let std_dev = (&non_negative_variance + &self.epsilon).sqrt();
-        
-        // --- ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ ---
-        // Шаг 3: Добавляем эпсилон ЕЩЕ РАЗ к знаменателю ПЕРЕД делением.
-        // Это стандартная практика, которая стабилизирует ОБРАТНЫЙ ПРОХОД (градиенты).
-        // Если std_dev равен нулю, мы будем делить на epsilon, а не на ноль,
-        // предотвращая "взрыв" градиента до бесконечности.
-        let stable_denominator = &std_dev + &self.epsilon;
-        let normalized = &(inputs - &mean) / &stable_denominator;
-
-        // Шаг 4: Применяем обучаемые параметры.
+        // Применяем обучаемые параметры
         let scaled = &normalized * &self.gamma;
         let shifted = &scaled + &self.beta;
 
