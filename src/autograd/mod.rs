@@ -1,6 +1,8 @@
+// --- Файл: src/autograd/mod.rs ---
+
 //! Модуль для автоматического дифференцирования (Autograd) на основе ASG.
 
-use crate::asg::{Asg, AsgError, NodeId, NodeType, Value};
+use crate::asg::{Asg, AsgError, NodeId, NodeType, Shape, Value};
 use crate::analysis::shape_inference::{ShapeInference, ShapeInferenceError};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -33,6 +35,7 @@ impl Gradients {
         }
     }
 
+    /// Вспомогательная функция для импорта узла из графа прямого прохода в граф градиентов.
     fn import_node(&mut self, source_node_id: NodeId) -> Result<NodeId, AutogradError> {
         let source_node = self.source_asg.get_node(source_node_id)?;
         let name = format!("external_{}_{}", self.source_asg.id, source_node_id);
@@ -49,6 +52,69 @@ impl Gradients {
         Ok(new_node_id)
     }
 
+    /// Сворачивает градиент до нужной формы, если имело место расширение (broadcasting).
+    fn reduce_grad_for_broadcast(
+        &mut self,
+        grad_id: NodeId,
+        grad_shape: &Shape,
+        target_shape: &Shape,
+    ) -> Result<NodeId, AutogradError> {
+        if grad_shape == target_shape {
+            return Ok(grad_id);
+        }
+
+        let mut current_grad_id = grad_id;
+        let mut current_shape = grad_shape.clone();
+
+        // Сначала суммируем по всем новым осям, которые были добавлены спереди.
+        let rank_diff = current_shape.len() - target_shape.len();
+        if rank_diff > 0 {
+            for _ in 0..rank_diff {
+                // ИСПРАВЛЕНИЕ [E0605]: Берем размер ведущей размерности, а не весь вектор.
+                let n = current_shape[0] as f32;
+                // Sum = Mean * N. `Mean` работает по последней оси.
+                let transposed_id = self.grad_asg.add_node(None, NodeType::Transpose(current_grad_id, 0, current_shape.len() - 1));
+                let mean_id = self.grad_asg.add_node(None, NodeType::Mean(transposed_id));
+                let n_const_id = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(n).into_dyn())));
+                current_grad_id = self.grad_asg.add_node(None, NodeType::Multiply(mean_id, n_const_id));
+
+                // Обновляем текущую форму после редукции
+                current_shape.remove(0);
+            }
+        }
+        
+        // Затем суммируем по осям, которые были равны 1.
+        let mut axes_to_sum = Vec::new();
+        for (i, dim) in target_shape.iter().enumerate() {
+            if *dim == 1 && current_shape[i] > 1 {
+                axes_to_sum.push(i);
+            }
+        }
+
+        for axis in axes_to_sum {
+             let n = current_shape[axis] as f32;
+             // Transpose -> Mean -> Multiply -> Transpose back
+             let rank = current_shape.len();
+             let transposed_id = self.grad_asg.add_node(None, NodeType::Transpose(current_grad_id, axis, rank - 1));
+             let mean_id = self.grad_asg.add_node(None, NodeType::Mean(transposed_id));
+             let n_const_id = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(n).into_dyn())));
+             let summed_id = self.grad_asg.add_node(None, NodeType::Multiply(mean_id, n_const_id));
+             current_grad_id = self.grad_asg.add_node(None, NodeType::Transpose(summed_id, axis, rank - 1));
+             current_shape[axis] = 1;
+        }
+
+        // В конце, если нужно, делаем reshape до финальной формы (например, из [1, D] в [D])
+        if &current_shape != target_shape {
+            let shape_vec: Vec<f32> = target_shape.iter().map(|&d| d as f32).collect();
+            let shape_tensor = Value::Tensor(ndarray::Array::from(shape_vec).into_dyn());
+            
+            let shape_node_id = self.grad_asg.add_node(None, NodeType::Literal(shape_tensor));
+            current_grad_id = self.grad_asg.add_node(None, NodeType::Reshape(current_grad_id, shape_node_id));
+        }
+
+        Ok(current_grad_id)
+    }
+
     pub fn build(mut self, target_node_id: NodeId, with_respect_to: &[NodeId]) -> Result<Asg, AutogradError> {
         let sorted_nodes = self.topological_sort(target_node_id)?;
         
@@ -62,76 +128,66 @@ impl Gradients {
             let upstream_grad_id = *self.grad_map.get(&node_id).unwrap();
             
             match node.node_type.clone() {
-                 NodeType::Add(lhs_id, rhs_id) | NodeType::Subtract(lhs_id, rhs_id) => {
-                    let grad_shape = node.shape.as_ref().ok_or(AutogradError::ShapeInference(ShapeInferenceError::MissingShapeInfo(node_id)))?.clone();
-                    
-                    let lhs_shape = self.source_asg.get_node(lhs_id)?.shape.as_ref().unwrap().clone();
-                    let mut grad_lhs = upstream_grad_id;
-                    if lhs_shape != grad_shape {
-                        grad_lhs = self.grad_asg.add_node(None, NodeType::Sum(grad_lhs));
-                    }
-                    
-                    let rhs_shape = self.source_asg.get_node(rhs_id)?.shape.as_ref().unwrap().clone();
-                    let mut grad_rhs = upstream_grad_id;
-                    if rhs_shape != grad_shape {
-                        grad_rhs = self.grad_asg.add_node(None, NodeType::Sum(grad_rhs));
-                    }
+NodeType::Add(lhs_id, rhs_id) | NodeType::Subtract(lhs_id, rhs_id) => {
+    // Получаем всю необходимую информацию СРАЗУ, чтобы освободить заимствование 'self'
+    let upstream_shape = self.source_asg.get_node(node_id)?.shape.as_ref().unwrap().clone();
+    let lhs_shape = self.source_asg.get_node(lhs_id)?.shape.as_ref().unwrap().clone();
+    let rhs_shape = self.source_asg.get_node(rhs_id)?.shape.as_ref().unwrap().clone();
+    let is_subtract = matches!(node.node_type, NodeType::Subtract(_, _));
 
-                    if let NodeType::Subtract(_,_) = node.node_type {
-                        let neg_one = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(-1.0).into_dyn())));
-                        grad_rhs = self.grad_asg.add_node(None, NodeType::Multiply(grad_rhs, neg_one));
-                    }
-                    
-                    self.accumulate_grad(lhs_id, grad_lhs)?;
-                    self.accumulate_grad(rhs_id, grad_rhs)?;
-                }
+    // --- Grad for LHS ---
+    // Для сложения и вычитания градиент по левому операнду - это просто вышестоящий градиент.
+    let grad_lhs_raw = upstream_grad_id;
+    let grad_lhs = self.reduce_grad_for_broadcast(grad_lhs_raw, &upstream_shape, &lhs_shape)?;
+    self.accumulate_grad(lhs_id, grad_lhs)?;
+
+    // --- Grad for RHS ---
+    // Для вычитания градиент по правому операнду нужно инвертировать.
+    let grad_rhs_raw = if is_subtract {
+        let neg_one = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(-1.0).into_dyn())));
+        self.grad_asg.add_node(None, NodeType::Multiply(upstream_grad_id, neg_one))
+    } else {
+        upstream_grad_id
+    };
+    let grad_rhs = self.reduce_grad_for_broadcast(grad_rhs_raw, &upstream_shape, &rhs_shape)?;
+    self.accumulate_grad(rhs_id, grad_rhs)?;
+}
                 NodeType::Multiply(a_id, b_id) => {
-                    let grad_shape = node.shape.as_ref().unwrap().clone();
-                    
+                    let upstream_shape = self.source_asg.get_node(node_id)?.shape.as_ref().unwrap().clone();
+
+                    // --- Grad for A ---
                     let a_shape = self.source_asg.get_node(a_id)?.shape.as_ref().unwrap().clone();
                     let imported_b = self.import_node(b_id)?;
-                    let mut grad_a = self.grad_asg.add_node(None, NodeType::Multiply(upstream_grad_id, imported_b));
-                    if a_shape != grad_shape {
-                        grad_a = self.grad_asg.add_node(None, NodeType::Sum(grad_a));
-                    }
+                    let grad_a_raw = self.grad_asg.add_node(None, NodeType::Multiply(upstream_grad_id, imported_b));
+                    let grad_a = self.reduce_grad_for_broadcast(grad_a_raw, &upstream_shape, &a_shape)?;
                     self.accumulate_grad(a_id, grad_a)?;
 
+                    // --- Grad for B ---
                     let b_shape = self.source_asg.get_node(b_id)?.shape.as_ref().unwrap().clone();
                     let imported_a = self.import_node(a_id)?;
-                    let mut grad_b = self.grad_asg.add_node(None, NodeType::Multiply(upstream_grad_id, imported_a));
-                    if b_shape != grad_shape {
-                        grad_b = self.grad_asg.add_node(None, NodeType::Sum(grad_b));
-                    }
+                    let grad_b_raw = self.grad_asg.add_node(None, NodeType::Multiply(upstream_grad_id, imported_a));
+                    let grad_b = self.reduce_grad_for_broadcast(grad_b_raw, &upstream_shape, &b_shape)?;
                     self.accumulate_grad(b_id, grad_b)?;
                 }
                 NodeType::Divide(a_id, b_id) => {
-                    let grad_shape = node.shape.as_ref().unwrap().clone();
-                    
-                    // --- grad(a) = grad(upstream) / b
+                    let upstream_shape = self.source_asg.get_node(node_id)?.shape.as_ref().unwrap().clone();
+
+                    // --- grad(a) = upstream_grad / b ---
                     let a_shape = self.source_asg.get_node(a_id)?.shape.as_ref().unwrap().clone();
                     let imported_b = self.import_node(b_id)?;
-                    let mut grad_a = self.grad_asg.add_node(None, NodeType::Divide(upstream_grad_id, imported_b));
-                    if a_shape != grad_shape {
-                        // Если форма 'a' была меньше, суммируем градиент
-                        grad_a = self.grad_asg.add_node(None, NodeType::Sum(grad_a));
-                    }
+                    let grad_a_raw = self.grad_asg.add_node(None, NodeType::Divide(upstream_grad_id, imported_b));
+                    let grad_a = self.reduce_grad_for_broadcast(grad_a_raw, &upstream_shape, &a_shape)?;
                     self.accumulate_grad(a_id, grad_a)?;
                     
-                    // --- grad(b) = -grad(upstream) * a / b^2
+                    // --- grad(b) = -upstream_grad * a / b^2 ---
                     let b_shape = self.source_asg.get_node(b_id)?.shape.as_ref().unwrap().clone();
                     let imported_a = self.import_node(a_id)?;
                     let neg_one = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(-1.0).into_dyn())));
-                    
-                    // Переиспользуем `imported_b` для возведения в квадрат
                     let b_squared = self.grad_asg.add_node(None, NodeType::Multiply(imported_b, imported_b));
                     let num = self.grad_asg.add_node(None, NodeType::Multiply(upstream_grad_id, imported_a));
                     let neg_num = self.grad_asg.add_node(None, NodeType::Multiply(num, neg_one));
-                    let mut grad_b = self.grad_asg.add_node(None, NodeType::Divide(neg_num, b_squared));
-                    
-                    if b_shape != grad_shape {
-                        // Если форма 'b' была меньше (наш случай!), суммируем градиент
-                        grad_b = self.grad_asg.add_node(None, NodeType::Sum(grad_b));
-                    }
+                    let grad_b_raw = self.grad_asg.add_node(None, NodeType::Divide(neg_num, b_squared));
+                    let grad_b = self.reduce_grad_for_broadcast(grad_b_raw, &upstream_shape, &b_shape)?;
                     self.accumulate_grad(b_id, grad_b)?;
                 }
                 NodeType::Sum(x_id) => {
@@ -155,33 +211,19 @@ impl Gradients {
                     self.accumulate_grad(x_id, final_grad)?;
                 }
                 NodeType::Variance(x_id) => {
-     let n_val = *self.source_asg.get_node(x_id)?.shape.as_ref().unwrap().last().unwrap_or(&1) as f32;
-                    if n_val == 0.0 { continue; } // Защита от деления на ноль
+                    let n_val = *self.source_asg.get_node(x_id)?.shape.as_ref().unwrap().last().unwrap_or(&1) as f32;
+                    if n_val == 0.0 { continue; }
 
-                    // Импортируем узел `x` из исходного графа
                     let imported_x = self.import_node(x_id)?;
-                    
-                    // ВАЖНО: Мы должны импортировать результат `mean(x)` из исходного графа, а не вычислять его заново.
-                    // Для этого нам нужно найти узел Mean(x) в исходном графе. Но так как узел Variance
-                    // не хранит ID узла Mean, мы воссоздаем его здесь. Это менее эффективно, но математически корректно.
                     let mean_node = self.grad_asg.add_node(None, NodeType::Mean(imported_x));
-                    
-                    // Вычисляем (x - mean(x))
                     let x_minus_mean = self.grad_asg.add_node(None, NodeType::Subtract(imported_x, mean_node));
 
-                    // Вычисляем константу 2.0 / N
                     let two_div_n_val = 2.0 / n_val;
                     let two_div_n_node = self.grad_asg.add_node(None, NodeType::Literal(Value::Tensor(ndarray::arr0(two_div_n_val).into_dyn())));
-
-                    // Вычисляем (2/N) * (x - mean(x))
                     let term = self.grad_asg.add_node(None, NodeType::Multiply(two_div_n_node, x_minus_mean));
-
-                    // Транслируем вышестоящий градиент до нужной формы
+                    
                     let broadcasted_grad = self.grad_asg.add_node(None, NodeType::Broadcast(upstream_grad_id, imported_x));
-
-                    // Умножаем на вышестоящий градиент (цепное правило)
                     let final_grad = self.grad_asg.add_node(None, NodeType::Multiply(broadcasted_grad, term));
-
                     self.accumulate_grad(x_id, final_grad)?;
                 }
                 NodeType::MaxPool2d { input, kernel_size, stride } => {

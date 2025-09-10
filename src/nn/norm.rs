@@ -17,11 +17,11 @@ const EPSILON: f32 = 1e-5;
 /// Имеет два обучаемых параметра: `gamma` (масштаб) и `beta` (сдвиг).
 pub struct LayerNorm {
     /// Обучаемый параметр масштабирования (gain). Инициализируется единицами.
-    gamma: Tensor,
+    pub gamma: Tensor,
     /// Обучаемый параметр сдвига (bias). Инициализируется нулями.
-    beta: Tensor,
+    pub beta: Tensor,
     /// Малая константа для избежания деления на ноль, представленная как узел в графе.
-    epsilon: Tensor,
+    pub epsilon: Tensor,
 }
 
 impl LayerNorm {

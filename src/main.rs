@@ -1,3 +1,5 @@
+// --- Файл: src/main.rs ---
+
 //! Главный исполняемый файл с правильной многопоточной архитектурой для GUI.
 
 // --- 1. Объявление модулей проекта ---
@@ -183,7 +185,7 @@ fn run_computation(tx: Option<mpsc::Sender<asg::Asg>>) -> Result<(), Box<dyn std
     Ok(())
 }
 
-/// Универсальный Цикл Обучения (без изменений)
+/// Универсальный Цикл Обучения
 fn run_training_loop<B: Backend>(
     backend: B,
     forward_graph: asg::Asg,
@@ -224,7 +226,8 @@ fn run_training_loop<B: Backend>(
         
         let mut computed_grads = HashMap::new();
         for (name, value) in param_names.iter().zip(grad_value_vec.into_iter()) {
-            if name.contains("gamma") || name.contains("beta") { continue; }
+            // --- ИСПРАВЛЕНИЕ: Удаляем временный хак ---
+            // Старый код: if name.contains("gamma") || name.contains("beta") { continue; }
             computed_grads.insert(name.clone(), value);
         }
 
