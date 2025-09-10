@@ -36,7 +36,7 @@ impl Module for LayerNorm {
         let mean = x.mean();
         let x_minus_mean = x - &mean;
         
-        // Вычисляем variance как E[(x - E[x])^2]
+        // Вычисляем variance как E[(x - E[x])^2] через базовые операции
         let squared_error = &x_minus_mean * &x_minus_mean;
         let variance = squared_error.mean();
         

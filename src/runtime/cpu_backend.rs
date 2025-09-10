@@ -45,23 +45,18 @@ impl<'a> ExecutionContext<'a> {
 
         let result = match &node.node_type {
             NodeType::Input { name } => {
-                // Входы и параметры должны быть уже в memo к моменту вызова `run`
-                // Если мы дошли сюда, значит, значения нет в кэше, это ошибка.
                 return Err(RuntimeError::MissingInput(name.clone(), node.id));
             }
             NodeType::Parameter { name } => {
-                // Аналогично для параметров.
                 return Err(RuntimeError::MissingParameter(name.clone(), node.id));
             }
             NodeType::Literal(value) => Ok(value.clone()),
             NodeType::External { source_asg_id, source_node_id, .. } => {
-                // Пытаемся получить значение из кэша. Если его там нет, это ошибка.
                 self.memo.get(&(*source_asg_id, *source_node_id))
                     .cloned()
                     .ok_or(RuntimeError::NodeNotFound(*source_node_id, *source_asg_id))
             },
 
-            // Бинарные операции
             NodeType::Add(l, r) | NodeType::Subtract(l, r) | NodeType::Multiply(l, r) | NodeType::Divide(l, r) |
             NodeType::MatrixMultiply(l, r) | NodeType::GreaterThan(l, r) | NodeType::Power(l, r) |
             NodeType::Reshape(l, r) | NodeType::Broadcast(l, r) | NodeType::ReduceSumTo(l, r) => {
@@ -82,7 +77,6 @@ impl<'a> ExecutionContext<'a> {
                 }
             }
 
-            // Унарные операции
             NodeType::ReLU(op) | NodeType::Sigmoid(op) | NodeType::Softmax(op) | NodeType::Sum(op) |
             NodeType::Mean(op) | NodeType::Variance(op) | NodeType::Sqrt(op) => {
                 let operand = self.evaluate_node(asg_id, *op)?;
@@ -122,7 +116,6 @@ impl<'a> ExecutionContext<'a> {
     }
 }
 
-/// Исполнительный бэкенд, работающий на CPU.
 pub struct CpuBackend;
 
 impl CpuBackend {
@@ -134,14 +127,12 @@ impl Default for CpuBackend {
 }
 
 impl Backend for CpuBackend {
-    /// Для CPU-бэкенда "данные на устройстве" - это обычные `Value`.
     type DeviceData = Value;
 
     fn load_data(
         &self,
         data: &HashMap<String, Value>,
     ) -> Result<HashMap<String, Self::DeviceData>, RuntimeError> {
-        // Копирование на CPU не требуется, просто клонируем HashMap.
         Ok(data.clone())
     }
 
@@ -155,12 +146,10 @@ impl Backend for CpuBackend {
 
         let mut context = ExecutionContext::new(main_asg, initial_memo);
 
-        // Последовательно вычисляем каждый узел
         for node_id in sorted_nodes {
             context.evaluate_node(main_asg.id, node_id)?;
         }
         
-        // Собираем результаты
         let mut results = Vec::new();
         for output_node_id in &main_asg.outputs {
             let result = context.memo.get(&(main_asg.id, *output_node_id))
@@ -168,18 +157,13 @@ impl Backend for CpuBackend {
                 .clone();
             results.push(result);
         }
-        // Возвращаем результаты и итоговый кэш
         Ok((results, context.memo))
     }
 
     fn retrieve_data(&self, device_data: &[Self::DeviceData]) -> Result<Vec<Value>, RuntimeError> {
-        // Загрузка с CPU не требуется, просто клонируем данные.
         Ok(device_data.to_vec())
     }
 }
-
-
-// --- Реализации операций ---
 
 fn op_add(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a + &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
 fn op_subtract(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a - &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
@@ -195,7 +179,6 @@ fn op_mean(operand: Value) -> Result<Value, RuntimeError> {
         Value::Tensor(a) => {
             let axis = Axis(a.ndim() - 1);
             let mean = a.mean_axis(axis).unwrap();
-            // Возвращаем удаленную ось с размером 1
             Ok(Value::Tensor(mean.insert_axis(axis).into_dyn()))
         }, 
         _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) 
@@ -206,7 +189,6 @@ fn op_variance(operand: Value) -> Result<Value, RuntimeError> {
         Value::Tensor(a) => {
             let axis = Axis(a.ndim() - 1);
             let var = a.var_axis(axis, 0.0);
-            // Возвращаем удаленную ось с размером 1
             Ok(Value::Tensor(var.insert_axis(axis).into_dyn()))
         }, 
         _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) 
@@ -238,16 +220,8 @@ fn op_matmul(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     Err(RuntimeError::UnimplementedOperation(format!("Matmul for dims {} and {}", a.ndim(), b.ndim())))
 }
 
-fn op_max_pool2d(
-    operand: Value,
-    kernel_size: (usize, usize),
-    stride: (usize, usize),
-) -> Result<Value, RuntimeError> {
-    let input_tensor = match operand {
-        Value::Tensor(val) => val,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
-    };
-
+fn op_max_pool2d(operand: Value, kernel_size: (usize, usize), stride: (usize, usize)) -> Result<Value, RuntimeError> {
+    let input_tensor = match operand { Value::Tensor(val) => val, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }), };
     let input_arr: Array4<f32> = input_tensor.into_dimensionality().map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
     let (n, c, h, w) = input_arr.dim();
     let (kh, kw) = kernel_size;
@@ -255,67 +229,33 @@ fn op_max_pool2d(
     let out_h = (h - kh) / sh + 1;
     let out_w = (w - kw) / sw + 1;
     let mut output_arr = Array4::<f32>::zeros((n, c, out_h, out_w));
-
-    for n_idx in 0..n {
-        for c_idx in 0..c {
-            for oh_idx in 0..out_h {
-                for ow_idx in 0..out_w {
-                    let h_start = oh_idx * sh;
-                    let w_start = ow_idx * sw;
-                    let window = input_arr.slice(s![n_idx, c_idx, h_start..h_start + kh, w_start..w_start + kw]);
-                    let max_val = window.iter().fold(f32::NEG_INFINITY, |max, &val| max.max(val));
-                    output_arr[[n_idx, c_idx, oh_idx, ow_idx]] = max_val;
-                }
-            }
-        }
-    }
+    for n_idx in 0..n { for c_idx in 0..c { for oh_idx in 0..out_h { for ow_idx in 0..out_w {
+        let h_start = oh_idx * sh;
+        let w_start = ow_idx * sw;
+        let window = input_arr.slice(s![n_idx, c_idx, h_start..h_start + kh, w_start..w_start + kw]);
+        let max_val = window.iter().fold(f32::NEG_INFINITY, |max, &val| max.max(val));
+        output_arr[[n_idx, c_idx, oh_idx, ow_idx]] = max_val;
+    }}}}
     Ok(Value::Tensor(output_arr.into_dyn()))
 }
 
-fn op_max_unpool2d(
-    operand: Value,
-    original_input: Value,
-    kernel_size: (usize, usize),
-    stride: (usize, usize),
-) -> Result<Value, RuntimeError> {
-    let grad_tensor = match operand {
-        Value::Tensor(val) => val.into_dimensionality::<ndarray::Ix4>().map_err(|e| RuntimeError::ShapeError(e.to_string()))?,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
-    };
-    let original_tensor = match original_input {
-        Value::Tensor(val) => val.into_dimensionality::<ndarray::Ix4>().map_err(|e| RuntimeError::ShapeError(e.to_string()))?,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
-    };
-
+fn op_max_unpool2d(operand: Value, original_input: Value, kernel_size: (usize, usize), stride: (usize, usize)) -> Result<Value, RuntimeError> {
+    let grad_tensor = match operand { Value::Tensor(val) => val.into_dimensionality::<ndarray::Ix4>().map_err(|e| RuntimeError::ShapeError(e.to_string()))?, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }), };
+    let original_tensor = match original_input { Value::Tensor(val) => val.into_dimensionality::<ndarray::Ix4>().map_err(|e| RuntimeError::ShapeError(e.to_string()))?, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }), };
     let (_n, _c, h, w) = original_tensor.dim();
     let (kh, kw) = kernel_size;
     let (sh, sw) = stride;
     let mut output_arr = Array4::<f32>::zeros((_n, _c, h, w));
-
-    for n_idx in 0..grad_tensor.dim().0 {
-        for c_idx in 0..grad_tensor.dim().1 {
-            for oh_idx in 0..grad_tensor.dim().2 {
-                for ow_idx in 0..grad_tensor.dim().3 {
-                    let h_start = oh_idx * sh;
-                    let w_start = ow_idx * sw;
-                    let window = original_tensor.slice(s![n_idx, c_idx, h_start..h_start + kh, w_start..w_start + kw]);
-                    let grad_val = grad_tensor[[n_idx, c_idx, oh_idx, ow_idx]];
-                    
-                    let mut max_val = f32::NEG_INFINITY;
-                    let mut max_pos = (0, 0);
-                    for r in 0..kh {
-                        for col in 0..kw {
-                            if window[[r, col]] > max_val {
-                                max_val = window[[r, col]];
-                                max_pos = (r, col);
-                            }
-                        }
-                    }
-                    output_arr[[n_idx, c_idx, h_start + max_pos.0, w_start + max_pos.1]] += grad_val;
-                }
-            }
-        }
-    }
+    for n_idx in 0..grad_tensor.dim().0 { for c_idx in 0..grad_tensor.dim().1 { for oh_idx in 0..grad_tensor.dim().2 { for ow_idx in 0..grad_tensor.dim().3 {
+        let h_start = oh_idx * sh;
+        let w_start = ow_idx * sw;
+        let window = original_tensor.slice(s![n_idx, c_idx, h_start..h_start + kh, w_start..w_start + kw]);
+        let grad_val = grad_tensor[[n_idx, c_idx, oh_idx, ow_idx]];
+        let mut max_val = f32::NEG_INFINITY;
+        let mut max_pos = (0, 0);
+        for r in 0..kh { for col in 0..kw { if window[[r, col]] > max_val { max_val = window[[r, col]]; max_pos = (r, col); } } }
+        output_arr[[n_idx, c_idx, h_start + max_pos.0, w_start + max_pos.1]] += grad_val;
+    }}}}
     Ok(Value::Tensor(output_arr.into_dyn()))
 }
 
@@ -332,7 +272,6 @@ fn op_reduce_sum_to(source: Value, target_shape_provider: Value) -> Result<Value
     let source_rank = source_tensor.ndim();
     let target_rank = target_shape.len();
     
-    // Шаг 1: Суммируем ведущие оси, чтобы выровнять ранг.
     if source_rank > target_rank {
         let rank_diff = source_rank - target_rank;
         for _ in 0..rank_diff {
@@ -340,7 +279,6 @@ fn op_reduce_sum_to(source: Value, target_shape_provider: Value) -> Result<Value
         }
     }
     
-    // Шаг 2: Суммируем оси, где размерность target равна 1.
     let mut axes_to_sum = Vec::new();
     let current_shape = source_tensor.shape();
     let rank_diff = current_shape.len() - target_rank;
@@ -354,9 +292,9 @@ fn op_reduce_sum_to(source: Value, target_shape_provider: Value) -> Result<Value
         source_tensor = source_tensor.sum_axis(Axis(axis));
     }
     
-    // Шаг 3: Финальное изменение формы, чтобы она точно соответствовала целевой.
+    // ИСПРАВЛЕНО: Заменяем .into_shape() на .to_shape()?.to_owned()
     source_tensor
-        .into_shape(target_shape.as_slice())
+        .to_shape(target_shape)
         .map_err(|e| RuntimeError::ShapeError(e.to_string()))
-        .map(Value::Tensor)
+        .map(|view| Value::Tensor(view.to_owned()))
 }
