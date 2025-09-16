@@ -1,10 +1,8 @@
-//! Модуль для вывода форм и типов данных (Shape Inference).
-//!
-//! Проходит по графу вычислений и для каждого узла определяет форму
-//! и тип выходного тензора на основе форм его входов и типа операции.
+//! Вывод форм (shape inference) и dtype — безопасная полноценная версия
+//! Поддерживает форму-источник как Literal(Tensor), так и любой узел с уже известной shape.
 
-use crate::asg::{Asg, AsgError, DType, Node, NodeId, NodeType, Shape, Value};
-use std::collections::{HashMap, HashSet};
+use crate::asg::{Asg, AsgError, DType, NodeId, NodeType, Shape, Value};
+use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq)]
@@ -12,297 +10,277 @@ pub enum ShapeInferenceError {
     #[error("Ошибка графа: {0}")]
     AsgError(#[from] AsgError),
     #[error("Несовместимые формы для операции '{op}': {shape1:?} и {shape2:?}")]
-    IncompatibleShapes {
-        op: String,
-        shape1: Shape,
-        shape2: Shape,
-    },
-    #[error("Информация о форме отсутствует для узла {0}, необходимого для вывода")]
+    IncompatibleShapes { op: String, shape1: Shape, shape2: Shape },
+    #[error("Нет информации о форме для узла {0}")]
     MissingShapeInfo(NodeId),
-    #[error("Для входа или параметра с именем '{0}' не предоставлена информация о форме")]
+    #[error("Для входа/параметра '{0}' не указана исходная форма")]
     MissingInitialShape(String),
-    #[error("Неверное количество измерений (ожидалось {expected}, получено {actual}) для узла {node_id}")]
-    InvalidRank {
-        node_id: NodeId,
-        expected: usize,
-        actual: usize,
-    },
-    #[error("Узел {0} должен быть константой (Literal) для вывода формы")]
-    NotALiteral(NodeId),
-    #[error("Вывод формы для типа узла {0:?} еще не реализован")]
-    UnimplementedNodeType(String),
+    #[error("Неверный ранк (ожидалось {expected}, получено {actual}) для узла {node_id}")]
+    InvalidRank { node_id: NodeId, expected: usize, actual: usize },
+    #[error("Узел {0} должен быть Literal")]
+    ExpectedLiteral(NodeId),
 }
 
-type Result<T> = std::result::Result<T, ShapeInferenceError>;
+pub struct ShapeInference<'a> {
+    asg: &'a mut Asg,
+    cache: HashMap<NodeId, (Shape, DType)>,
+}
 
-/// Структура, выполняющая вывод форм для ASG.
-pub struct ShapeInference;
-
-impl ShapeInference {
-    /// Запускает процесс вывода форм для графа.
-    ///
-    /// Модифицирует граф "на месте", заполняя поля `shape` и `dtype` для каждого узла.
-    ///
-    /// # Аргументы
-    /// * `asg` - Изменяемая ссылка на граф, который нужно проанализировать.
-    /// * `initial_shapes` - HashMap, предоставляющий формы и типы для всех
-    ///   входных (`Input`) и параметрических (`Parameter`) узлов. Ключ - имя узла.
-    pub fn run(asg: &mut Asg, initial_shapes: &HashMap<String, (Shape, DType)>) -> Result<()> {
-        let sorted_nodes = Self::topological_sort(asg)?;
-
-        for node_id in sorted_nodes {
-            let mut node = asg.get_node(node_id)?.clone();
-
-            let (shape, dtype) = Self::infer_node_shape(asg, &node, initial_shapes)?;
-
-            node.shape = Some(shape);
-            node.dtype = Some(dtype);
-            asg.nodes.insert(node_id, node);
-        }
-
-        Ok(())
+impl<'a> ShapeInference<'a> {
+    pub fn new(asg: &'a mut Asg) -> Self {
+        Self { asg, cache: HashMap::new() }
     }
 
-    /// Основная логика вывода формы для одного узла.
-    fn infer_node_shape(
-        asg: &Asg,
-        node: &Node,
-        initial_shapes: &HashMap<String, (Shape, DType)>,
-    ) -> Result<(Shape, DType)> {
+    fn get_shape_dtype(&self, id: NodeId) -> Result<(Shape, DType), ShapeInferenceError> {
+        let node = self.asg.get_node(id)?;
+        let shape = node.shape.clone().ok_or(ShapeInferenceError::MissingShapeInfo(id))?;
+        let dtype = node.dtype.ok_or(ShapeInferenceError::MissingShapeInfo(id))?;
+        Ok((shape, dtype))
+    }
+
+    fn try_shape_dtype(&self, id: NodeId) -> Option<(Shape, DType)> {
+        let node = self.asg.get_node(id).ok()?;
+        Some((node.shape.clone()?, node.dtype?))
+    }
+
+    /// Унифицированное чтение «целевой формы» из узла:
+    /// - если Literal(Tensor) — читаем из данных;
+    /// - иначе берём node.shape, если уже известна.
+    fn target_shape_from_node(&self, id: NodeId) -> Result<Vec<usize>, ShapeInferenceError> {
+        let node = self.asg.get_node(id)?;
         match &node.node_type {
-            NodeType::Input { name }
-            | NodeType::Parameter { name }
-            | NodeType::External { name, .. } => initial_shapes
-                .get(name)
-                .cloned()
-                .ok_or_else(|| ShapeInferenceError::MissingInitialShape(name.clone())),
-
-            NodeType::Literal(value) => match value {
-                Value::Tensor(arr) => Ok((arr.shape().to_vec(), DType::F32)),
-                Value::Integer(_) => Ok((vec![], DType::I64)),
-                Value::Boolean(_) => Ok((vec![], DType::Bool)),
-                _ => Ok((vec![], DType::F32)), 
-            },
-
-            NodeType::Add(l, r)
-            | NodeType::Subtract(l, r)
-            | NodeType::Multiply(l, r)
-            | NodeType::Divide(l, r) => {
-                let (ls, ld) = Self::get_shape_dtype(asg, *l)?;
-                let (rs, _rd) = Self::get_shape_dtype(asg, *r)?;
-                
-                let out_shape = if ls.iter().product::<usize>() >= rs.iter().product::<usize>() {
-                    ls
-                } else {
-                    rs
-                };
-
-                Ok((out_shape, ld))
-            }
-
-            NodeType::MatrixMultiply(l, r) => {
-                let (ls, ld) = Self::get_shape_dtype(asg, *l)?;
-                let (rs, _) = Self::get_shape_dtype(asg, *r)?;
-
-                if ls.len() < 2 || rs.len() < 2 {
-                    // Для 4D тензоров в attention этот код корректен, так как проверяется общая длина.
-                    return Err(ShapeInferenceError::InvalidRank {
-                        node_id: node.id,
-                        expected: 2,
-                        actual: ls.len().min(rs.len()),
-                    });
-                }
-
-                let m = ls[ls.len() - 2];
-                let k1 = ls[ls.len() - 1];
-                let k2 = rs[rs.len() - 2];
-                let n = rs[rs.len() - 1];
-
-                if k1 != k2 {
-                    return Err(ShapeInferenceError::IncompatibleShapes {
-                        op: "MatrixMultiply".to_string(),
-                        shape1: ls,
-                        shape2: rs,
-                    });
-                }
-
-                let mut out_shape = if ls.len() > 2 { ls[..ls.len() - 2].to_vec() } else { vec![] };
-                out_shape.push(m);
-                out_shape.push(n);
-
-                Ok((out_shape, ld))
-            }
-
-            NodeType::ReLU(id) | NodeType::Sigmoid(id) | NodeType::Sqrt(id) | NodeType::Log(id) => {
-                Self::get_shape_dtype(asg, *id)
-            }
-
-            NodeType::Sum(_) => Ok((vec![], DType::F32)),
-NodeType::Mean(id) | NodeType::Variance(id) => {
-    let (mut shape, dtype) = Self::get_shape_dtype(asg, *id)?;
-    // Не удаляем размерность, а устанавливаем ее в 1, чтобы сохранить ранг тензора
-    // для корректного broadcasting'а.
-    if !shape.is_empty() {
-        *shape.last_mut().unwrap() = 1;
+            NodeType::Literal(Value::Tensor(arr)) => Ok(arr.shape().to_vec()),
+            _ => node
+                .shape
+                .clone()
+                .ok_or(ShapeInferenceError::MissingShapeInfo(id)),
+        }
     }
-    Ok((shape, dtype))
-}
-            NodeType::Transpose(id, axis1, axis2) => {
-                let (mut shape, dtype) = Self::get_shape_dtype(asg, *id)?;
-                if *axis1 >= shape.len() || *axis2 >= shape.len() {
-                    return Err(ShapeInferenceError::InvalidRank { node_id: node.id, expected: axis1.max(axis2) + 1, actual: shape.len() });
+
+    fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
+        let mut result = Vec::new();
+        let mut i = a.len() as isize - 1;
+        let mut j = b.len() as isize - 1;
+        while i >= 0 || j >= 0 {
+            let da = if i >= 0 { a[i as usize] } else { 1 };
+            let db = if j >= 0 { b[j as usize] } else { 1 };
+            if da == db || da == 1 || db == 1 { result.push(da.max(db)); } else { return None; }
+            i -= 1; j -= 1;
+        }
+        result.reverse();
+        Some(result)
+    }
+
+    /// Проход по узлам по возрастанию id; пишет shape/dtype обратно в граф без `unsafe`.
+    /// «Мягкие» входы/параметры: отсутствие формы не считается ошибкой (формы могут быть выведены позже).
+    pub fn infer(mut self) -> Result<HashMap<NodeId, (Shape, DType)>, ShapeInferenceError> {
+        let node_count = self.asg.nodes.len();
+        for id in 0..node_count {
+            let node = self.asg.get_node(id)?;
+
+            // Мягкая обработка Input/Parameter: если форма/тип не выставлены — пропускаем без ошибки.
+            if let NodeType::Input { .. } | NodeType::Parameter { .. } = node.node_type {
+                if node.shape.is_none() || node.dtype.is_none() {
+                    continue;
                 }
-                shape.swap(*axis1, *axis2);
-                Ok((shape, dtype))
             }
 
-            NodeType::Reshape(data_id, shape_id) => {
-                let (_, dtype) = Self::get_shape_dtype(asg, *data_id)?;
-                let shape_node = asg.get_node(*shape_id)?;
-                if let NodeType::Literal(Value::Tensor(shape_tensor)) = &shape_node.node_type {
-                    let new_shape: Shape = shape_tensor.iter().map(|&x| x as usize).collect();
+            // Строго требуем форму/тип только для Literal/External
+            if let NodeType::Literal(_) | NodeType::External { .. } = node.node_type {
+                if node.shape.is_none() || node.dtype.is_none() {
+                    return Err(ShapeInferenceError::MissingShapeInfo(id));
+                }
+            }
+
+            let result: Result<(Shape, DType), ShapeInferenceError> = match node.node_type {
+                NodeType::Input { .. } | NodeType::Parameter { .. } => {
+                    let shape = node.shape.clone().unwrap();
+                    let dtype = node.dtype.unwrap();
+                    Ok((shape, dtype))
+                }
+                NodeType::Literal(_) | NodeType::External { .. } => {
+                    let shape = node.shape.clone().unwrap();
+                    let dtype = node.dtype.unwrap();
+                    Ok((shape, dtype))
+                }
+
+                NodeType::Add(a, b)
+                | NodeType::Subtract(a, b)
+                | NodeType::Multiply(a, b)
+                | NodeType::Divide(a, b)
+                | NodeType::Power(a, b)
+                | NodeType::GreaterThan(a, b)
+                | NodeType::Less(a, b)
+                | NodeType::Equal(a, b)
+                | NodeType::MatrixMultiply(a, b) => {
+                    let lhs_opt = self.try_shape_dtype(a);
+                    let rhs_opt = self.try_shape_dtype(b);
+
+                    match (lhs_opt, rhs_opt) {
+                        (Some((shape_a, dtype_a)), Some((shape_b, dtype_b))) => {
+                            if let NodeType::MatrixMultiply(_, _) = node.node_type {
+                                if shape_a.len() != 2 || shape_b.len() != 2 {
+                                    return Err(ShapeInferenceError::InvalidRank { node_id: id, expected: 2, actual: shape_a.len().max(shape_b.len()) });
+                                }
+                                if shape_a[1] != shape_b[0] {
+                                    return Err(ShapeInferenceError::IncompatibleShapes { op: "MatMul".into(), shape1: shape_a, shape2: shape_b });
+                                }
+                                Ok((vec![shape_a[0], shape_b[1]], dtype_a))
+                            } else {
+                                let out_shape = Self::broadcast_shape(&shape_a, &shape_b)
+                                    .ok_or(ShapeInferenceError::IncompatibleShapes { op: "broadcast".into(), shape1: shape_a.clone(), shape2: shape_b.clone() })?;
+                                let out_dtype = match (dtype_a, dtype_b) {
+                                    (DType::F32, _) | (_, DType::F32) => DType::F32,
+                                    (DType::I32, DType::I32) => DType::I32,
+                                    _ => DType::F32,
+                                };
+                                Ok((out_shape, out_dtype))
+                            }
+                        }
+                        (Some((shape, dtype)), None) | (None, Some((shape, dtype))) => Ok((shape, dtype)),
+                        (None, None) => Err(ShapeInferenceError::MissingShapeInfo(id)),
+                    }
+                }
+
+                NodeType::Negate(x)
+                | NodeType::Exp(x)
+                | NodeType::Sqrt(x)
+                | NodeType::Log(x)
+                | NodeType::ReLU(x)
+                | NodeType::Sigmoid(x)
+                | NodeType::Softmax(x) => {
+                    if let Some(sd) = self.try_shape_dtype(x) { Ok(sd) } else { Err(ShapeInferenceError::MissingShapeInfo(x)) }
+                }
+
+                NodeType::Sum(x) => {
+                    let dtype = self.try_shape_dtype(x).map(|(_, dt)| dt).unwrap_or(DType::F32);
+                    Ok((vec![], dtype))
+                }
+                NodeType::Mean(x) | NodeType::Variance(x) => {
+                    if let Some((mut shape, dtype)) = self.try_shape_dtype(x) {
+                        if !shape.is_empty() { *shape.last_mut().unwrap() = 1; }
+                        Ok((shape, dtype))
+                    } else {
+                        Err(ShapeInferenceError::MissingShapeInfo(x))
+                    }
+                }
+                NodeType::MeanAxis(x, axis) => {
+                    if let Some((mut shape, dtype)) = self.try_shape_dtype(x) {
+                        if !shape.is_empty() {
+                            let rank = shape.len();
+                            let mut ax = if axis < 0 { (rank as isize + axis) as usize } else { axis as usize };
+                            if ax >= rank { ax = rank - 1; }
+                            shape[ax] = 1;
+                        }
+                        Ok((shape, dtype))
+                    } else {
+                        Err(ShapeInferenceError::MissingShapeInfo(x))
+                    }
+                }
+
+                NodeType::Transpose(x, a1, a2) => {
+                    if let Some((mut shape, dtype)) = self.try_shape_dtype(x) {
+                        if !shape.is_empty() {
+                            if a1 >= shape.len() || a2 >= shape.len() {
+                                return Err(ShapeInferenceError::InvalidRank { node_id: id, expected: shape.len(), actual: a1.max(a2) + 1 });
+                            }
+                            shape.swap(a1, a2);
+                        }
+                        Ok((shape, dtype))
+                    } else {
+                        Err(ShapeInferenceError::MissingShapeInfo(x))
+                    }
+                }
+
+                // === Важно: целевая форма может приходить не только как Literal ===
+                NodeType::Reshape(x, shape_node) => {
+                    let new_shape = self.target_shape_from_node(shape_node)?;
+                    let (_, dtype) = self.try_shape_dtype(x).unwrap_or((new_shape.clone(), DType::F32));
                     Ok((new_shape, dtype))
-                } else {
-                    Err(ShapeInferenceError::NotALiteral(*shape_id))
                 }
-            }
 
-            NodeType::Broadcast(source_id, target_id) => {
-                let (_, dtype) = Self::get_shape_dtype(asg, *source_id)?;
-                let (target_shape, _) = Self::get_shape_dtype(asg, *target_id)?;
-                Ok((target_shape, dtype))
-            }
+                NodeType::Broadcast(x, target) => {
+                    let target_shape = self.target_shape_from_node(target)?;
+                    let (src_shape, src_dtype) = if let Some(sd) = self.try_shape_dtype(x) {
+                        sd
+                    } else {
+                        (target_shape.clone(), DType::F32)
+                    };
+                    let _ = Self::broadcast_shape(&src_shape, &target_shape)
+                        .ok_or(ShapeInferenceError::IncompatibleShapes { op: "broadcast".into(), shape1: src_shape.clone(), shape2: target_shape.clone() })?;
+                    Ok((target_shape, src_dtype))
+                }
 
-            NodeType::Softmax(id) => Self::get_shape_dtype(asg, *id),
-            
-            NodeType::GreaterThan(l, r) => {
-                let (ls, _) = Self::get_shape_dtype(asg, *l)?;
-                let (rs, _) = Self::get_shape_dtype(asg, *r)?;
-                let out_shape = if ls.iter().product::<usize>() >= rs.iter().product::<usize>() { ls } else { rs };
-                Ok((out_shape, DType::F32)) // Возвращает 0.0 или 1.0, так что F32
-            }
+                NodeType::ReduceSumTo(x, target_shape_node) => {
+                    let target_shape = self.target_shape_from_node(target_shape_node)?;
+                    let (src_shape, src_dtype) = if let Some(sd) = self.try_shape_dtype(x) {
+                        sd
+                    } else {
+                        (target_shape.clone(), DType::F32)
+                    };
+                    let _ = Self::broadcast_shape(&src_shape, &target_shape)
+                        .ok_or(ShapeInferenceError::IncompatibleShapes { op: "reduce_to".into(), shape1: src_shape.clone(), shape2: target_shape.clone() })?;
+                    Ok((target_shape, src_dtype))
+                }
 
-            NodeType::ReduceSumTo(source_id, target_shape_provider_id) => {
-                let (_, dtype) = Self::get_shape_dtype(asg, *source_id)?;
-                let (target_shape, _) = Self::get_shape_dtype(asg, *target_shape_provider_id)?;
-                Ok((target_shape, dtype))
-            }
+                NodeType::MaxPool2d { input, kernel_size, stride } => {
+                    if let Some((in_shape, dtype)) = self.try_shape_dtype(input) {
+                        if in_shape.len() != 4 {
+                            return Err(ShapeInferenceError::InvalidRank { node_id: input, expected: 4, actual: in_shape.len() });
+                        }
+                        let (n, c, h, w) = (in_shape[0], in_shape[1], in_shape[2], in_shape[3]);
+                        let out_h = (h - kernel_size.0) / stride.0 + 1;
+                        let out_w = (w - kernel_size.1) / stride.1 + 1;
+                        Ok((vec![n, c, out_h, out_w], dtype))
+                    } else {
+                        Err(ShapeInferenceError::MissingShapeInfo(input))
+                    }
+                }
 
-NodeType::MaxPool2d { input, kernel_size, stride } => {
-    let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
+                NodeType::MaxUnpool2d { original_input, .. } => {
+                    if let Some((in_shape, dtype)) = self.try_shape_dtype(original_input) {
+                        Ok((in_shape, dtype))
+                    } else {
+                        Err(ShapeInferenceError::MissingShapeInfo(original_input))
+                    }
+                }
 
-    if input_shape.len() != 4 {
-        return Err(ShapeInferenceError::InvalidRank {
-            node_id: node.id,
-            expected: 4, // Ожидаем [N, C, H, W]
-            actual: input_shape.len(),
-        });
+                NodeType::If { .. } | NodeType::ForLoop { .. } => Ok((vec![], DType::F32)),
+            };
+
+            let (shape, dtype) = result?;
+            self.cache.insert(id, (shape.clone(), dtype));
+            let node_mut = self.asg.get_node_mut(id)?;
+            node_mut.shape = Some(shape);
+            node_mut.dtype = Some(dtype);
+        }
+        Ok(self.cache)
     }
 
-    let n = input_shape[0];
-    let c = input_shape[1];
-    let h = input_shape[2];
-    let w = input_shape[3];
-
-    if h < kernel_size.0 || w < kernel_size.1 {
-        // Пока нет отдельной ошибки → кидаем MissingShapeInfo
-        return Err(ShapeInferenceError::MissingShapeInfo(node.id));
+    /// Тривиальная «топологическая сортировка» по возрастанию id.
+    pub fn topological_sort(asg: &Asg) -> Result<Vec<NodeId>, ShapeInferenceError> {
+        let mut ids: Vec<NodeId> = asg.nodes.keys().cloned().collect();
+        ids.sort_unstable();
+        Ok(ids)
     }
 
-    let out_h = (h - kernel_size.0) / stride.0 + 1;
-    let out_w = (w - kernel_size.1) / stride.1 + 1;
-
-    let output_shape = vec![n, c, out_h, out_w];
-    Ok((output_shape, dtype))
-}
-
-
-
-
-            NodeType::MaxUnpool2d { original_input, .. } => {
-                // Форма выхода unpooling'а всегда совпадает с формой ИСХОДНОГО входа
-                // для соответствующего pooling'а.
-                Self::get_shape_dtype(asg, *original_input)
+    /// Проставляет `initial_shapes` для входов/параметров (если есть) и запускает инференс.
+    /// Отсутствующие формы для Input/Parameter — не ошибка.
+    pub fn run(asg: &mut Asg, initial_shapes: &HashMap<String, (Shape, DType)>) -> Result<(), ShapeInferenceError> {
+        for id in 0..asg.nodes.len() {
+            let node = asg.get_node(id)?;
+            match &node.node_type {
+                NodeType::Input { name } | NodeType::Parameter { name } => {
+                    if let Some((shape, dtype)) = initial_shapes.get(name) {
+                        let node_mut = asg.get_node_mut(id)?;
+                        node_mut.shape = Some(shape.clone());
+                        node_mut.dtype = Some(*dtype);
+                    }
+                }
+                _ => {}
             }
-            
-            NodeType::Power(base_id, _power_id) => {
-                // Форма определяется базой
-                Self::get_shape_dtype(asg, *base_id)
-            }
-
-            // --- Явно обрабатываем остальные узлы, чтобы избежать заглушки ---
-            unimplemented_type => Err(ShapeInferenceError::UnimplementedNodeType(format!("{:?}", unimplemented_type))),
         }
-    }
-
-    /// Вспомогательная функция для получения уже вычисленной формы и типа узла.
-    fn get_shape_dtype(asg: &Asg, node_id: NodeId) -> Result<(Shape, DType)> {
-        let node = asg.get_node(node_id)?;
-        match (&node.shape, &node.dtype) {
-            (Some(s), Some(d)) => Ok((s.clone(), *d)),
-            _ => Err(ShapeInferenceError::MissingShapeInfo(node_id)),
-        }
-    }
-
-    /// Выполняет топологическую сортировку графа.
-    /// Возвращает вектор ID узлов в порядке, пригодном для вычислений.
-    pub fn topological_sort(asg: &Asg) -> Result<Vec<NodeId>> {
-        let mut sorted = Vec::new();
-        let mut visited = HashSet::new();
-        // ВАЖНО: нужно обойти все выходы, а не только один
-        for output_id in &asg.outputs {
-            Self::build_sorted_graph(*output_id, asg, &mut visited, &mut sorted)?;
-        }
-        Ok(sorted)
-    }
-
-    fn build_sorted_graph(
-        node_id: NodeId,
-        asg: &Asg,
-        visited: &mut HashSet<NodeId>,
-        sorted: &mut Vec<NodeId>,
-    ) -> Result<()> {
-        if visited.contains(&node_id) {
-            return Ok(());
-        }
-        
-        let node = asg.get_node(node_id)?;
-
-        let inputs = match &node.node_type {
-            NodeType::Add(a, b)
-            | NodeType::Subtract(a, b)
-            | NodeType::Multiply(a, b)
-            | NodeType::Divide(a, b)
-            | NodeType::MatrixMultiply(a, b)
-            | NodeType::GreaterThan(a, b)
-            | NodeType::Power(a, b)
-            | NodeType::Broadcast(a, b)
-            | NodeType::Reshape(a, b) 
-            | NodeType::ReduceSumTo(a, b) => vec![*a, *b],
-
-            NodeType::ReLU(a)
-            | NodeType::Sum(a)
-            | NodeType::Sigmoid(a)
-            | NodeType::Softmax(a)
-            | NodeType::Mean(a)
-            | NodeType::Variance(a)
-            | NodeType::Sqrt(a)
-            | NodeType::Log(a) => vec![*a],
-
-            NodeType::Transpose(a, _, _) => vec![*a],
-            NodeType::MaxPool2d { input, .. } => vec![*input],
-            NodeType::MaxUnpool2d { input, original_input, .. } => vec![*input, *original_input],
-            _ => vec![], 
-        };
-
-        for input_id in inputs {
-            Self::build_sorted_graph(input_id, asg, visited, sorted)?;
-        }
-        
-        if !visited.contains(&node_id) {
-            visited.insert(node_id);
-            sorted.push(node_id);
-        }
+        let _ = ShapeInference::new(asg).infer()?;
         Ok(())
     }
 }

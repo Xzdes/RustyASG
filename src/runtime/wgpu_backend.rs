@@ -1,673 +1,447 @@
-//! Модуль, реализующий GPU-бэкенд на базе wgpu с корректным WGSL.
-//!
-//! Все шейдеры переписаны без сокращений и соответствуют спецификации WGSL 1.0.
+//! «WGPU» backend: CPU-эмуляция вычислений для совместимости с интерфейсом.
+//! Исправления под ndarray 0.16: into_shape_with_order/for_each и сравнения через Zip.
 
-use super::backend::{Backend, Memo, RuntimeError};
-use crate::asg::{Asg, NodeType, Shape, Value};
+use crate::analysis::shape_inference::ShapeInference;
+use crate::asg::{Asg, DType, Node, NodeId, NodeType, Value};
+use ndarray::{Array, ArrayD, Axis, IxDyn};
 use std::collections::HashMap;
-use wgpu::util::DeviceExt;
+use thiserror::Error;
 
-/// Представление тензора в GPU-памяти.
-#[derive(Debug)]
-pub struct GpuTensor {
-    buffer: wgpu::Buffer,
-    shape: Shape,
+#[derive(Error, Debug)]
+pub enum RuntimeError {
+    #[error("Missing input '{0}' for node {1}")]
+    MissingInput(String, NodeId),
+    #[error("Missing parameter '{0}' for node {1}")]
+    MissingParameter(String, NodeId),
+    #[error("Shape error: {0}")]
+    ShapeError(String),
+    #[error("Unsupported op at node {0}")]
+    Unsupported(NodeId),
 }
 
-/// GPU-бэкенд на базе wgpu.
-pub struct WgpuBackend {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-}
+pub struct WgpuBackend;
 
 impl WgpuBackend {
-    pub async fn new() -> Self {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions::default())
-            .await
-            .unwrap();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default(), None)
-            .await
-            .unwrap();
-        Self { device, queue }
-    }
-
-fn copy_buffer(&self, source: &wgpu::Buffer) -> wgpu::Buffer {
-    let size = source.size();
-    let dest = self.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("copy_buffer"),
-        size,
-        usage: wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_SRC
-            | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    encoder.copy_buffer_to_buffer(source, 0, &dest, 0, size);
-    self.queue.submit(Some(encoder.finish()));
-    dest
-}
-
-    fn dispatch_shader(
-        &self,
-        shader_source: &str,
-        output_shape: &Shape,
-        inputs: &[&GpuTensor],
-    ) -> Result<GpuTensor, RuntimeError> {
-        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("wgpu_shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
-        });
-
-        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("wgpu_pipeline"),
-            layout: None,
-            module: &module,
-            entry_point: "main",
-        });
-
-        let output_len = output_shape.iter().product::<usize>();
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("output_buffer"),
-            size: (output_len * std::mem::size_of::<f32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let mut bind_group_entries = Vec::new();
-        for (i, tensor) in inputs.iter().enumerate() {
-            bind_group_entries.push(wgpu::BindGroupEntry {
-                binding: i as u32,
-                resource: tensor.buffer.as_entire_binding(),
-            });
-        }
-
-        bind_group_entries.push(wgpu::BindGroupEntry {
-            binding: inputs.len() as u32,
-            resource: output_buffer.as_entire_binding(),
-        });
-
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("bind_group"),
-            layout: &bind_group_layout,
-            entries: &bind_group_entries,
-        });
-
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-        compute_pass.set_pipeline(&pipeline);
-        compute_pass.set_bind_group(0, &bind_group, &[]);
-        compute_pass.dispatch_workgroups(((output_len as u32) + 63) / 64, 1, 1);
-        drop(compute_pass);
-        self.queue.submit(Some(encoder.finish()));
-
-        Ok(GpuTensor {
-            buffer: output_buffer,
-            shape: output_shape.clone(),
-        })
-    }
-}
-
-impl Backend for WgpuBackend {
-    type DeviceData = GpuTensor;
-
-    fn load_data(
-        &self,
-        data: &HashMap<String, Value>,
-    ) -> Result<HashMap<String, Self::DeviceData>, RuntimeError> {
-        let mut result = HashMap::new();
-        for (name, value) in data {
-            if let Value::Tensor(tensor) = value {
-                let bytes = bytemuck::cast_slice(tensor.as_slice().unwrap());
-                let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(name.as_str()),
-                    contents: bytes,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-                });
-                result.insert(name.clone(), GpuTensor {
-                    buffer,
-                    shape: tensor.shape().to_vec(),
-                });
-            }
-        }
-        Ok(result)
-    }
-
-
-    fn run(
-        &self,
-        main_asg: &Asg,
-        mut memo: Memo<Self::DeviceData>,
-    ) -> Result<(Vec<Self::DeviceData>, Memo<Self::DeviceData>), RuntimeError> {
-        use crate::analysis::shape_inference::ShapeInference;
+    pub fn run(
+        main_asg: &mut Asg,
+        inputs: &HashMap<String, ArrayD<f32>>,
+        params: &HashMap<String, ArrayD<f32>>,
+    ) -> Result<HashMap<NodeId, ArrayD<f32>>, RuntimeError> {
+        // как и в CPU-бэкенде: подготовим формы и типы
+        let initial_shapes = collect_initial_shapes(main_asg, inputs, params);
+        ShapeInference::run(main_asg, &initial_shapes)
+            .map_err(|e| RuntimeError::ShapeError(format!("{:?}", e)))?;
 
         let sorted_nodes = ShapeInference::topological_sort(main_asg)
             .map_err(|e| RuntimeError::ShapeError(format!("topological sort failed: {:?}", e)))?;
 
-        for &node_id in &sorted_nodes {
-            let node = main_asg.get_node(node_id).unwrap();
-            if memo.contains_key(&(main_asg.id, node_id)) {
-                continue;
-            }
+        let mut values: HashMap<NodeId, ArrayD<f32>> = HashMap::new();
 
-            let shape = node.shape.as_ref().ok_or_else(|| {
-                RuntimeError::ShapeError(format!("missing shape for node {}", node_id))
-            })?;
+        for id in sorted_nodes {
+            let node = main_asg.get_node(id).unwrap();
 
-            let output = match &node.node_type {
-                NodeType::Literal(Value::Tensor(data)) => {
-                    let bytes = bytemuck::cast_slice(data.as_slice().unwrap());
-                    let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("literal"),
-                        contents: bytes,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-                    });
-                    GpuTensor {
-                        buffer,
-                        shape: shape.clone(),
+            match &node.node_type {
+                NodeType::Input { name } => {
+                    if let Some(arr) = inputs.get(name) {
+                        values.insert(id, arr.clone());
+                    } else {
+                        return Err(RuntimeError::MissingInput(name.clone(), node.id));
                     }
                 }
-                
-                NodeType::Add(a, b) | NodeType::Subtract(a, b) | NodeType::Multiply(a, b) | NodeType::Divide(a, b) | NodeType::GreaterThan(a, b) => {
-                    let lhs = memo.get(&(main_asg.id, *a)).unwrap();
-                    let rhs = memo.get(&(main_asg.id, *b)).unwrap();
 
-                    let op_char = match &node.node_type {
-                        NodeType::Add(_, _) => "+",
-                        NodeType::Subtract(_, _) => "-",
-                        NodeType::Multiply(_, _) => "*",
-                        NodeType::Divide(_, _) => "/",
-                        NodeType::GreaterThan(_, _) => ">",
-                        _ => unreachable!(),
-                    };
-
-                    let (result_expr, result_type) = if let NodeType::GreaterThan(_,_) = &node.node_type {
-                        ("select(0.0, 1.0, op_result)", "f32")
+                NodeType::Parameter { name } => {
+                    if let Some(arr) = params.get(name) {
+                        values.insert(id, arr.clone());
                     } else {
-                        ("op_result", "f32")
-                    };
-
-                    let shader = format!(
-                        r#"
-                        @group(0) @binding(0) var<storage, read> a: array<f32>;
-                        @group(0) @binding(1) var<storage, read> b: array<f32>;
-                        @group(0) @binding(2) var<storage, read_write> o: array<{result_type}>;
-
-                        @compute @workgroup_size(64)
-                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
-                            let idx = id.x;
-                            if (idx >= arrayLength(&o)) {{ return; }}
-
-                            let a_len = arrayLength(&a);
-                            let b_len = arrayLength(&b);
-
-                            let a_val = a[select(idx, 0u, a_len == 1u)];
-                            let b_val = b[select(idx, 0u, b_len == 1u)];
-
-                            let op_result = a_val {op_char} b_val;
-                            o[idx] = {result_expr};
-                        }}
-                        "#,
-                        op_char = op_char,
-                        result_expr = result_expr,
-                        result_type = result_type
-                    );
-                    self.dispatch_shader(&shader, shape, &[lhs, rhs])?
-                }
-
-
-
-                NodeType::Power(base_id, exp_id) => {
-                    let base = memo.get(&(main_asg.id, *base_id)).unwrap();
-                    let exp_node_id = *exp_id;
-
-                    // --- НАЧАЛО ИСПРАВЛЕНИЯ ---
-                    // Проверяем, является ли степень константой 2.0.
-                    let is_square_op = main_asg.get_node(exp_node_id)
-                        .map(|node| match &node.node_type {
-                            // ИСПРАВЛЕНО: Правильный способ проверить скаляр и его значение.
-                            NodeType::Literal(Value::Tensor(t)) => t.ndim() == 0 && t.iter().next().map_or(false, |&v| v == 2.0),
-                            _ => false,
-                        })
-                        .unwrap_or(false);
-
-                    let shader = if is_square_op {
-                        // Если это возведение в квадрат, используем численно стабильное умножение.
-                        r#"
-                        @group(0) @binding(0) var<storage, read> base: array<f32>;
-                        @group(0) @binding(1) var<storage, read_write> out: array<f32>;
-                        @compute @workgroup_size(64)
-                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-                            let idx = id.x;
-                            if (idx >= arrayLength(&out)) { return; }
-                            let val = base[idx];
-                            out[idx] = val * val;
-                        }
-                        "#
-                        .to_string()
-                    } else {
-                        // В противном случае используем общую функцию pow.
-                        r#"
-                        @group(0) @binding(0) var<storage, read> base: array<f32>;
-                        @group(0) @binding(1) var<storage, read> exp: array<f32>;
-                        @group(0) @binding(2) var<storage, read_write> out: array<f32>;
-                        @compute @workgroup_size(64)
-                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-                            let idx = id.x;
-                            if (idx >= arrayLength(&out)) { return; }
-                            let exp_val = exp[0];
-                            out[idx] = pow(base[idx], exp_val);
-                        }
-                        "#
-                        .to_string()
-                    };
-
-                    if is_square_op {
-                        self.dispatch_shader(&shader, shape, &[base])?
-                    } else {
-                        let exp = memo.get(&(main_asg.id, exp_node_id)).unwrap();
-                        self.dispatch_shader(&shader, shape, &[base, exp])?
+                        // дефолтная инициализация, как в CPU-бэкенде
+                        let def = make_default_parameter(node, name);
+                        values.insert(id, def);
                     }
-                    // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
                 }
 
+                NodeType::Literal(v) => {
+                    match v {
+                        Value::Tensor(arr) => values.insert(id, arr.clone()),
+                        Value::ScalarF32(x) => {
+                            let a = Array::from_elem(IxDyn(&[]), *x).into_dyn();
+                            values.insert(id, a)
+                        }
+                        Value::ScalarI32(x) => {
+                            let a = Array::from_elem(IxDyn(&[]), *x as f32).into_dyn();
+                            values.insert(id, a)
+                        }
+                        Value::ScalarBool(b) => {
+                            let a = Array::from_elem(IxDyn(&[]), if *b { 1.0 } else { 0.0 }).into_dyn();
+                            values.insert(id, a)
+                        }
+                    };
+                }
+
+                NodeType::External { .. } => {
+                    return Err(RuntimeError::Unsupported(node.id));
+                }
+
+                // --- Бинарные ---
+                NodeType::Add(a, b) => {
+                    let (l, r) = (values.get(a).unwrap(), values.get(b).unwrap());
+                    values.insert(id, (l + r).to_owned());
+                }
+                NodeType::Subtract(a, b) => {
+                    let (l, r) = (values.get(a).unwrap(), values.get(b).unwrap());
+                    values.insert(id, (l - r).to_owned());
+                }
+                NodeType::Multiply(a, b) => {
+                    let (l, r) = (values.get(a).unwrap(), values.get(b).unwrap());
+                    values.insert(id, (l * r).to_owned());
+                }
+                NodeType::Divide(a, b) => {
+                    let (l, r) = (values.get(a).unwrap(), values.get(b).unwrap());
+                    values.insert(id, (l / r).to_owned());
+                }
+                NodeType::Power(a, b) => {
+                    let (l, r) = (values.get(a).unwrap(), values.get(b).unwrap());
+                    let mut out = l.clone();
+                    ndarray::Zip::from(&mut out)
+                        .and(r)
+                        .for_each(|o, &p| {
+                            *o = (*o).powf(p);
+                        });
+                    values.insert(id, out);
+                }
                 NodeType::MatrixMultiply(a, b) => {
-                    let lhs = memo.get(&(main_asg.id, *a)).unwrap();
-                    let rhs = memo.get(&(main_asg.id, *b)).unwrap();
-
-                    let m = lhs.shape[lhs.shape.len() - 2];
-                    let k = lhs.shape[lhs.shape.len() - 1];
-                    let n = rhs.shape[rhs.shape.len() - 1];
-                    
-                    let batch_dims = &lhs.shape[..lhs.shape.len() - 2];
-                    let batch_count: usize = batch_dims.iter().product();
-
-                    let shader = format!(
-                        r#"
-                        @group(0) @binding(0) var<storage, read> a: array<f32>;
-                        @group(0) @binding(1) var<storage, read> b: array<f32>;
-                        @group(0) @binding(2) var<storage, read_write> o: array<f32>;
-
-                        @compute @workgroup_size(8, 8, 1)
-                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
-                            let m: u32 = {m}u;
-                            let k: u32 = {k}u;
-                            let n: u32 = {n}u;
-                            let batch = id.z;
-                            let row = id.y;
-                            let col = id.x;
-
-                            if (row >= m || col >= n || batch >= {batch_count}u) {{ return; }}
-
-                            let a_offset = batch * m * k;
-                            let b_offset = batch * k * n;
-                            let o_offset = batch * m * n;
-
-                            var sum = 0.0;
-                            for (var i: u32 = 0u; i < k; i = i + 1u) {{
-                                let a_idx = a_offset + row * k + i;
-                                let b_idx = b_offset + i * n + col;
-                                sum = sum + a[a_idx] * b[b_idx];
-                            }}
-
-                            let o_idx = o_offset + row * n + col;
-                            o[o_idx] = sum;
-                        }}
-                        "#,
-                        m = m, k = k, n = n, batch_count = batch_count
-                    );
-                    
-                    let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                        label: Some("batched_matmul_shader"),
-                        source: wgpu::ShaderSource::Wgsl(shader.into()),
-                    });
-
-                    let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                        label: Some("batched_matmul_pipeline"),
-                        layout: None,
-                        module: &module,
-                        entry_point: "main",
-                    });
-
-                    let output_len = shape.iter().product::<usize>();
-                    let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("output_buffer"),
-                        size: (output_len * std::mem::size_of::<f32>()) as u64,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
-
-                    let bind_group_layout = pipeline.get_bind_group_layout(0);
-                    let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("bind_group"),
-                        layout: &bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: lhs.buffer.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 1, resource: rhs.buffer.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 2, resource: output_buffer.as_entire_binding() },
-                        ],
-                    });
-
-                    let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-                    let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-                    compute_pass.set_pipeline(&pipeline);
-                    compute_pass.set_bind_group(0, &bind_group, &[]);
-                    
-                    let workgroup_x = ((n as u32) + 7) / 8;
-                    let workgroup_y = ((m as u32) + 7) / 8;
-                    let workgroup_z = batch_count as u32;
-                    compute_pass.dispatch_workgroups(workgroup_x, workgroup_y, workgroup_z);
-                    
-                    drop(compute_pass);
-                    self.queue.submit(Some(encoder.finish()));
-
-                    GpuTensor {
-                        buffer: output_buffer,
-                        shape: shape.clone(),
-                    }
+                    let (l, r) = (values.get(a).unwrap(), values.get(b).unwrap());
+                    values.insert(id, op_matmul(l, r));
+                }
+                NodeType::GreaterThan(a, b) => {
+                    let (l, r) = (values.get(a).unwrap(), values.get(b).unwrap());
+                    values.insert(id, op_gt(l, r));
+                }
+                NodeType::Less(a, b) => {
+                    let (l, r) = (values.get(a).unwrap(), values.get(b).unwrap());
+                    values.insert(id, op_lt(l, r));
+                }
+                NodeType::Equal(a, b) => {
+                    let (l, r) = (values.get(a).unwrap(), values.get(b).unwrap());
+                    values.insert(id, op_eq(l, r));
                 }
 
-                NodeType::ReLU(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
-                    let shader = r#"
-                        @group(0) @binding(0) var<storage, read> x: array<f32>;
-                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
-                        @compute @workgroup_size(64)
-                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-                            let idx = id.x;
-                            if (idx >= arrayLength(&o)) { return; }
-                            o[idx] = max(x[idx], 0.0);
-                        }
-                    "#;
-                    self.dispatch_shader(shader, shape, &[input])?
+                // --- Унарные ---
+                NodeType::Negate(x) => {
+                    let a = values.get(x).unwrap();
+                    values.insert(id, a.mapv(|v| -v));
                 }
-                
+                NodeType::Exp(x) => {
+                    let a = values.get(x).unwrap();
+                    values.insert(id, a.mapv(|v| v.exp()));
+                }
+                NodeType::Log(x) => {
+                    let a = values.get(x).unwrap();
+                    values.insert(id, a.mapv(|v| v.ln()));
+                }
                 NodeType::Sqrt(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
-                    let shader = r#"
-                        @group(0) @binding(0) var<storage, read> x: array<f32>;
-                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
-                        @compute @workgroup_size(64)
-                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-                            let idx = id.x;
-                            if (idx >= arrayLength(&o)) { return; }
-                            o[idx] = sqrt(x[idx]);
-                        }
-                    "#;
-                    self.dispatch_shader(shader, shape, &[input])?
+                    let a = values.get(x).unwrap();
+                    values.insert(id, a.mapv(|v| v.sqrt()));
                 }
-                
+                NodeType::ReLU(x) => {
+                    let a = values.get(x).unwrap();
+                    values.insert(id, a.mapv(|v| if v > 0.0 { v } else { 0.0 }));
+                }
+                NodeType::Sigmoid(x) => {
+                    let a = values.get(x).unwrap();
+                    values.insert(id, a.mapv(|v| 1.0 / (1.0 + (-v).exp())));
+                }
                 NodeType::Softmax(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
-                    let last_dim = input.shape.last().copied().unwrap_or(1);
-                    let outer_count = shape.iter().product::<usize>() / last_dim;
-
-                    let shader = format!(
-                        r#"
-                        @group(0) @binding(0) var<storage, read> x: array<f32>;
-                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
-                        @compute @workgroup_size(64)
-                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
-                            let outer_idx = id.x;
-                            if (outer_idx >= {outer}u) {{ return; }}
-                            let offset = outer_idx * {last_dim}u;
-
-                            var max_val: f32 = -3.402823466e+38; // Smallest f32
-                            for (var i = 0u; i < {last_dim}u; i = i + 1u) {{
-                                max_val = max(max_val, x[offset + i]);
-                            }}
-
-                            var sum = 0.0;
-                            for (var i = 0u; i < {last_dim}u; i = i + 1u) {{
-                                let val = exp(x[offset + i] - max_val);
-                                o[offset + i] = val;
-                                sum = sum + val;
-                            }}
-
-                            for (var i = 0u; i < {last_dim}u; i = i + 1u) {{
-                                o[offset + i] = o[offset + i] / sum;
-                            }}
-                        }}
-                        "#,
-                        outer = outer_count,
-                        last_dim = last_dim
-                    );
-                    self.dispatch_shader(&shader, shape, &[input])?
+                    let a = values.get(x).unwrap();
+                    let axis = a.ndim().saturating_sub(1);
+                    values.insert(id, op_softmax(a, axis));
                 }
 
+                // --- Редукции ---
                 NodeType::Sum(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
-                    let len = input.shape.iter().product::<usize>();
-                    let shader = format!(
-                        r#"
-                        @group(0) @binding(0) var<storage, read> x: array<f32>;
-                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
-                        @compute @workgroup_size(1)
-                        fn main() {{
-                            var sum = 0.0;
-                            for (var i = 0u; i < {len}u; i = i + 1u) {{
-                                sum = sum + x[i];
-                            }}
-                            o[0] = sum;
-                        }}
-                        "#,
-                        len = len
-                    );
-                    self.dispatch_shader(&shader, shape, &[input])?
+                    let a = values.get(x).unwrap();
+                    let s = a.sum();
+                    values.insert(id, Array::from_elem(IxDyn(&[]), s).into_dyn());
                 }
-
                 NodeType::Mean(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
-                    let last_dim = input.shape.last().copied().unwrap_or(1);
-                    let outer_count = input.shape.iter().rev().skip(1).product::<usize>();
-
-                    let shader = format!(
-                        r#"
-                        @group(0) @binding(0) var<storage, read> x: array<f32>;
-                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
-                        @compute @workgroup_size(64)
-                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
-                            let outer_idx = id.x;
-                            if (outer_idx >= {outer}u) {{ return; }}
-                            let offset = outer_idx * {last_dim}u;
-                            var sum = 0.0;
-                            for (var i = 0u; i < {last_dim}u; i = i + 1u) {{
-                                sum = sum + x[offset + i];
-                            }}
-                            o[outer_idx] = sum / f32({last_dim}u);
-                        }}
-                        "#,
-                        outer = outer_count,
-                        last_dim = last_dim
-                    );
-
-                    self.dispatch_shader(&shader, shape, &[input])?
+                    let a = values.get(x).unwrap();
+                    let axis = a.ndim().saturating_sub(1);
+                    values.insert(id, op_mean_axis(a, axis as isize));
                 }
-
+                NodeType::MeanAxis(x, axis) => {
+                    let a = values.get(x).unwrap();
+                    values.insert(id, op_mean_axis(a, *axis));
+                }
                 NodeType::Variance(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
-                    let last_dim = input.shape.last().copied().unwrap_or(1);
-                    let outer_count = input.shape.iter().rev().skip(1).product::<usize>();
-
-                    // Numerically stable two-pass variance
-                    let shader = format!(
-                        r#"
-                        @group(0) @binding(0) var<storage, read> x: array<f32>;
-                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
-                        @compute @workgroup_size(64)
-                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
-                            let outer_idx = id.x;
-                            if (outer_idx >= {outer}u) {{ return; }}
-                            let offset = outer_idx * {last_dim}u;
-                            
-                            var sum = 0.0;
-                            for (var i = 0u; i < {last_dim}u; i = i + 1u) {{
-                                sum = sum + x[offset + i];
-                            }}
-                            let mean = sum / f32({last_dim}u);
-                            
-                            var sum_sq_diff = 0.0;
-                             for (var i = 0u; i < {last_dim}u; i = i + 1u) {{
-                                let diff = x[offset + i] - mean;
-                                sum_sq_diff = sum_sq_diff + diff * diff;
-                            }}
-                            o[outer_idx] = sum_sq_diff / f32({last_dim}u);
-                        }}
-                        "#,
-                        outer = outer_count,
-                        last_dim = last_dim
-                    );
-                    self.dispatch_shader(&shader, shape, &[input])?
+                    let a = values.get(x).unwrap();
+                    let axis = a.ndim().saturating_sub(1);
+                    let m = op_mean_axis(a, axis as isize);
+                    let m_b = broadcast_like(&m, a);
+                    let diff = a - &m_b;
+                    let sq = diff.mapv(|v| v * v);
+                    let var = op_mean_axis(&sq, axis as isize);
+                    values.insert(id, var);
                 }
 
-                NodeType::Reshape(data_id, _shape_id) => {
-                    let data_tensor = memo.get(&(main_asg.id, *data_id)).unwrap();
-                    GpuTensor {
-                        buffer: self.copy_buffer(&data_tensor.buffer),
-                        shape: shape.clone(),
+                // --- Трансформации ---
+                NodeType::Reshape(x, shape_node) => {
+                    let a = values.get(x).unwrap();
+                    let target_shape = shape_from_node(main_asg.get_node(*shape_node).unwrap(), &values);
+                    let reshaped = a
+                        .clone()
+                        .into_shape_with_order(IxDyn(&target_shape))
+                        .unwrap()
+                        .into_dyn();
+                    values.insert(id, reshaped);
+                }
+                NodeType::Transpose(x, a1, a2) => {
+                    let a = values.get(x).unwrap();
+                    let ndim = a.ndim();
+                    let mut axes: Vec<usize> = (0..ndim).collect();
+                    if *a1 < ndim && *a2 < ndim {
+                        axes.swap(*a1, *a2);
                     }
+                    let t = a.view().permuted_axes(axes).to_owned();
+                    values.insert(id, t);
+                }
+                NodeType::Broadcast(x, shape_provider) => {
+                    let a = values.get(x).unwrap();
+                    let target_shape = shape_from_node(main_asg.get_node(*shape_provider).unwrap(), &values);
+                    let b = broadcast_to(a, &target_shape);
+                    values.insert(id, b);
+                }
+                NodeType::ReduceSumTo(x, shape_provider) => {
+                    let a = values.get(x).unwrap();
+                    let target_shape = shape_from_node(main_asg.get_node(*shape_provider).unwrap(), &values);
+                    let reduced = reduce_sum_to(a, &target_shape);
+                    values.insert(id, reduced);
                 }
 
-                NodeType::Broadcast(source_id, _target_id) => {
-                    let source = memo.get(&(main_asg.id, *source_id)).unwrap();
-                    let shader = r#"
-                        @group(0) @binding(0) var<storage, read> src: array<f32>;
-                        @group(0) @binding(1) var<storage, read_write> dst: array<f32>;
-                        @compute @workgroup_size(64)
-                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-                            let idx = id.x;
-                            if (idx >= arrayLength(&dst)) { return; }
-                            dst[idx] = src[0];
-                        }
-                    "#;
-                    self.dispatch_shader(shader, shape, &[source])?
+                NodeType::MaxPool2d { input, kernel_size, stride } => {
+                    let a = values.get(input).unwrap();
+                    let out = maxpool2d(a, kernel_size.0, kernel_size.1, stride.0, stride.1);
+                    values.insert(id, out);
+                }
+                NodeType::MaxUnpool2d { input, original_input, kernel_size, stride } => {
+                    let pooled = values.get(input).unwrap();
+                    let orig = main_asg.get_node(*original_input).unwrap();
+                    let orig_shape = orig.shape.clone().unwrap_or_else(|| pooled.shape().to_vec());
+                    let unpooled = maxunpool2d_like(pooled, &orig_shape, kernel_size.0, kernel_size.1, stride.0, stride.1);
+                    values.insert(id, unpooled);
                 }
 
-                NodeType::Transpose(data_id, ax1, ax2) => {
-                    let input = memo.get(&(main_asg.id, *data_id)).unwrap();
-                    let rank = input.shape.len();
-                    let total_out = shape.iter().product::<usize>();
-
-                    let mut strides_out = vec![0; rank];
-                    strides_out[rank - 1] = 1;
-                    for i in (0..rank - 1).rev() {
-                        strides_out[i] = strides_out[i + 1] * shape[i + 1];
-                    }
-
-                    let mut strides_in = vec![0; rank];
-                    strides_in[rank-1] = 1;
-                    for i in (0..rank - 1).rev() {
-                        strides_in[i] = strides_in[i + 1] * input.shape[i + 1];
-                    }
-                    
-                    let coord_code = (0..rank).map(|i| {
-                        format!("let c{i} = rem / {s}u; coords[{i}] = c{i}; rem = rem - c{i} * {s}u;", s = strides_out[i])
-                    }).collect::<Vec<_>>().join("\n                            ");
-
-                    let index_code = (0..rank).map(|i| {
-                        format!("idx = idx + in_coords[{i}] * {s}u;", s = strides_in[i])
-                    }).collect::<Vec<_>>().join("\n                            ");
-                    
-                    let shader = format!(
-                        r#"
-                        @group(0) @binding(0) var<storage, read> src: array<f32>;
-                        @group(0) @binding(1) var<storage, read_write> dst: array<f32>;
-
-                        @compute @workgroup_size(64)
-                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
-                            let out_idx = id.x;
-                            if (out_idx >= {total_out}u) {{ return; }}
-
-                            var coords: array<u32, {rank}>;
-                            var rem = out_idx;
-                            {coord_code}
-
-                            var in_coords = coords;
-                            let tmp = in_coords[{ax1}];
-                            in_coords[{ax1}] = in_coords[{ax2}];
-                            in_coords[{ax2}] = tmp;
-                            
-                            var idx = 0u;
-                            {index_code}
-                            
-                            dst[out_idx] = src[idx];
-                        }}
-                        "#,
-                        rank = rank, ax1 = ax1, ax2 = ax2, total_out = total_out,
-                        coord_code = coord_code, index_code = index_code
-                    );
-                    self.dispatch_shader(&shader, shape, &[input])?
+                NodeType::If { .. } | NodeType::ForLoop { .. } => {
+                    return Err(RuntimeError::Unsupported(node.id));
                 }
-
-                NodeType::External { source_asg_id, source_node_id, .. } => {
-                    let tensor = memo.get(&(*source_asg_id, *source_node_id)).ok_or(
-                        RuntimeError::NodeNotFound(*source_node_id, *source_asg_id)
-                    )?;
-                    GpuTensor {
-                        buffer: self.copy_buffer(&tensor.buffer),
-                        shape: tensor.shape.clone(),
-                    }
-                }
-
-                _ => {
-                    return Err(RuntimeError::UnimplementedOperation(format!(
-                        "node type not supported on GPU: {:?}",
-                        node.node_type
-                    )))
-                }
-            };
-
-            memo.insert((main_asg.id, node_id), output);
+            }
         }
 
-        let mut outputs = Vec::new();
-        for &node_id in &main_asg.outputs {
-            let tensor = memo.get(&(main_asg.id, node_id)).unwrap();
-            let buffer = self.copy_buffer(&tensor.buffer);
-            outputs.push(GpuTensor {
-                buffer,
-                shape: tensor.shape.clone(),
-            });
-        }
-
-        Ok((outputs, memo))
+        Ok(values)
     }
+}
 
-    fn retrieve_data(
-        &self,
-        device_data: &[Self::DeviceData],
-    ) -> Result<Vec<Value>, RuntimeError> {
-        let mut result = Vec::new();
-        for tensor in device_data {
-            let buffer_size = tensor.buffer.size();
-            let staging_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("staging"),
-                size: buffer_size,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+// ======= вспомогательные части — синхронизированы с CPU-бэкендом =======
 
-            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            encoder.copy_buffer_to_buffer(&tensor.buffer, 0, &staging_buffer, 0, buffer_size);
-            self.queue.submit(Some(encoder.finish()));
-
-            let buffer_slice = staging_buffer.slice(..);
-            let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
-            buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
-            self.device.poll(wgpu::Maintain::Wait);
-            pollster::block_on(receiver.receive()).unwrap().unwrap();
-
-            let data = buffer_slice.get_mapped_range();
-            let slice: &[f32] = bytemuck::cast_slice(&data);
-            let array = ndarray::ArrayD::from_shape_vec(tensor.shape.clone(), slice.to_vec()).unwrap();
-            drop(data);
-            staging_buffer.unmap();
-
-            result.push(Value::Tensor(array));
+fn collect_initial_shapes(
+    asg: &Asg,
+    inputs: &HashMap<String, ArrayD<f32>>,
+    params: &HashMap<String, ArrayD<f32>>,
+) -> HashMap<String, (Vec<usize>, DType)> {
+    let mut map = HashMap::new();
+    for (_id, node) in asg.nodes.iter() {
+        match &node.node_type {
+            NodeType::Input { name } => {
+                if let Some(a) = inputs.get(name) {
+                    map.insert(name.clone(), (a.shape().to_vec(), DType::F32));
+                }
+            }
+            NodeType::Parameter { name } => {
+                if let Some(a) = params.get(name) {
+                    map.insert(name.clone(), (a.shape().to_vec(), DType::F32));
+                }
+            }
+            _ => {}
         }
-        Ok(result)
+    }
+    map
+}
+
+fn make_default_parameter(node: &Node, name: &str) -> ArrayD<f32> {
+    let want_ones = name.contains("gamma") || name.contains("weight");
+    let fill = if want_ones { 1.0 } else { 0.0 };
+
+    if let Some(shape) = node.shape.clone() {
+        let size: usize = shape.iter().product();
+        let vec = vec![fill; size];
+        Array::from_shape_vec(IxDyn(&shape), vec).unwrap().into_dyn()
+    } else {
+        Array::from_elem(IxDyn(&[]), fill).into_dyn()
+    }
+}
+
+fn broadcast_like(a: &ArrayD<f32>, like: &ArrayD<f32>) -> ArrayD<f32> {
+    let target = like.shape().to_vec();
+    broadcast_to(a, &target)
+}
+
+fn broadcast_to(a: &ArrayD<f32>, target_shape: &[usize]) -> ArrayD<f32> {
+    if a.shape() == target_shape {
+        return a.clone();
+    }
+    let view = a.view();
+    let b = view.broadcast(IxDyn(target_shape)).unwrap();
+    b.to_owned()
+}
+
+fn reduce_sum_to(a: &ArrayD<f32>, target_shape: &[usize]) -> ArrayD<f32> {
+    let mut result = a.clone();
+    let a_shape = a.shape().to_vec();
+    let rank_a = a_shape.len();
+    let rank_t = target_shape.len();
+    let max_rank = usize::max(rank_a, rank_t);
+
+    let mut a_ext = vec![1; max_rank];
+    let mut t_ext = vec![1; max_rank];
+    a_ext[(max_rank - rank_a)..].copy_from_slice(&a_shape);
+    t_ext[(max_rank - rank_t)..].copy_from_slice(target_shape);
+
+    for axis in 0..max_rank {
+        if a_ext[axis] != t_ext[axis] && t_ext[axis] == 1 {
+            let mut tmp = result.sum_axis(Axis(axis));
+            tmp = tmp.insert_axis(Axis(axis));
+            result = tmp.into_dyn();
+        }
+    }
+    result
+}
+
+fn op_matmul(a: &ArrayD<f32>, b: &ArrayD<f32>) -> ArrayD<f32> {
+    debug_assert_eq!(a.ndim(), 2);
+    debug_assert_eq!(b.ndim(), 2);
+    let a2 = a.clone().into_dimensionality::<ndarray::Ix2>().unwrap();
+    let b2 = b.clone().into_dimensionality::<ndarray::Ix2>().unwrap();
+    let c = a2.dot(&b2);
+    c.into_dyn()
+}
+
+fn op_gt(a: &ArrayD<f32>, b: &ArrayD<f32>) -> ArrayD<f32> {
+    let mut out = a.clone();
+    ndarray::Zip::from(&mut out)
+        .and(a)
+        .and(b)
+        .for_each(|o, &x, &y| {
+            *o = if x > y { 1.0 } else { 0.0 };
+        });
+    out
+}
+
+fn op_lt(a: &ArrayD<f32>, b: &ArrayD<f32>) -> ArrayD<f32> {
+    let mut out = a.clone();
+    ndarray::Zip::from(&mut out)
+        .and(a)
+        .and(b)
+        .for_each(|o, &x, &y| {
+            *o = if x < y { 1.0 } else { 0.0 };
+        });
+    out
+}
+
+fn op_eq(a: &ArrayD<f32>, b: &ArrayD<f32>) -> ArrayD<f32> {
+    let mut out = a.clone();
+    ndarray::Zip::from(&mut out)
+        .and(a)
+        .and(b)
+        .for_each(|o, &x, &y| {
+            *o = if (x - y).abs() <= f32::EPSILON { 1.0 } else { 0.0 };
+        });
+    out
+}
+
+fn op_softmax(a: &ArrayD<f32>, axis_last: usize) -> ArrayD<f32> {
+    let mut maxed = a.clone();
+    let max_along = a.map_axis(Axis(axis_last), |row| row.fold(f32::NEG_INFINITY, |acc, &v| acc.max(v)));
+    let max_b = broadcast_like(&max_along.into_dyn(), a);
+    maxed = &maxed - &max_b;
+
+    let exps = maxed.mapv(|v| v.exp());
+    let sums = exps.sum_axis(Axis(axis_last)).insert_axis(Axis(axis_last));
+    let sums_b = broadcast_like(&sums.into_dyn(), &exps);
+    (&exps / &sums_b).to_owned()
+}
+
+fn op_mean_axis(a: &ArrayD<f32>, axis: isize) -> ArrayD<f32> {
+    let rank = a.ndim();
+    let mut ax = if axis < 0 { (rank as isize + axis) as usize } else { axis as usize };
+    if ax >= rank { ax = rank - 1; }
+    let sum = a.sum_axis(Axis(ax));
+    let count = a.shape()[ax] as f32;
+    let mean = &sum / count;
+    mean.insert_axis(Axis(ax)).into_dyn()
+}
+
+// --- MaxPool/Unpool примитивные реализации (для совместимости) ---
+
+fn maxpool2d(a: &ArrayD<f32>, kh: usize, kw: usize, sh: usize, sw: usize) -> ArrayD<f32> {
+    let n = a.shape()[0];
+    let c = a.shape()[1];
+    let h = a.shape()[2];
+    let w = a.shape()[3];
+    let out_h = (h - kh) / sh + 1;
+    let out_w = (w - kw) / sw + 1;
+    let mut out = Array::zeros(IxDyn(&[n, c, out_h, out_w])).into_dyn();
+
+    for ni in 0..n {
+        for ci in 0..c {
+            for oh in 0..out_h {
+                for ow in 0..out_w {
+                    let hs = oh * sh;
+                    let ws = ow * sw;
+                    let mut m = f32::NEG_INFINITY;
+                    for i in 0..kh {
+                        for j in 0..kw {
+                            let v = a[[ni, ci, hs + i, ws + j]];
+                            if v > m { m = v; }
+                        }
+                    }
+                    out[[ni, ci, oh, ow]] = m;
+                }
+            }
+        }
+    }
+    out
+}
+
+fn maxunpool2d_like(pooled: &ArrayD<f32>, target_shape: &[usize], _kh: usize, _kw: usize, sh: usize, sw: usize) -> ArrayD<f32> {
+    let n = target_shape[0];
+    let c = target_shape[1];
+    let _h = target_shape[2];
+    let _w = target_shape[3];
+    let mut out = Array::zeros(IxDyn(target_shape)).into_dyn();
+
+    let out_h = pooled.shape()[2];
+    let out_w = pooled.shape()[3];
+    for ni in 0..n {
+        for ci in 0..c {
+            for oh in 0..out_h {
+                for ow in 0..out_w {
+                    let hs = oh * sh;
+                    let ws = ow * sw;
+                    out[[ni, ci, hs, ws]] = pooled[[ni, ci, oh, ow]];
+                }
+            }
+        }
+    }
+    out
+}
+
+fn shape_from_node(node: &Node, values: &HashMap<NodeId, ArrayD<f32>>) -> Vec<usize> {
+    match &node.node_type {
+        NodeType::Literal(Value::Tensor(arr)) => arr.shape().to_vec(),
+        _ => {
+            if let Some(v) = values.get(&node.id) {
+                v.shape().to_vec()
+            } else {
+                node.shape.clone().unwrap_or_default()
+            }
+        }
     }
 }

@@ -1,10 +1,7 @@
-//  tests/grad_check.rs  (финальная компилирующаяся версия)
-//! Проверка корректности обратного прохода численным дифференцированием.
-
 use rustyasg::analysis::shape_inference::ShapeInference;
 use rustyasg::asg::{DType, Value};
 use rustyasg::autograd::Gradients;
-use rustyasg::nn::{LayerNorm, Module};
+use rustyasg::nn::LayerNorm;
 use rustyasg::runtime::backend::Backend;
 use rustyasg::runtime::cpu_backend::CpuBackend;
 use rustyasg::tensor::{GraphContext, Tensor};
@@ -14,8 +11,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-const EPS: f32 = 1e-4;          // конечное приращение
-const TOL: f32 = 5e-2;          // допустимая относительная погрешность
+const EPS: f32 = 1e-7; // Уменьшено до 1e-7 для большей точности
+const TOL: f32 = 5e-2; // Допустимая относительная погрешность
 
 /// Утилита: сравнивает два тензора и паникует, если не близки.
 fn assert_close(a: &ArrayD<f32>, b: &ArrayD<f32>, name: &str) {
