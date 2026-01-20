@@ -1,5 +1,43 @@
-//! Graph-to-graph automatic differentiation with correct broadcasting
-//! and full support for Parameter nodes.
+//! # Automatic Differentiation Module
+//!
+//! This module implements **graph-to-graph automatic differentiation** (autograd)
+//! using reverse-mode differentiation (backpropagation).
+//!
+//! ## How It Works
+//!
+//! Instead of computing gradients during the forward pass, this module builds
+//! a **separate gradient graph** that computes ∂loss/∂params when executed.
+//!
+//! Key features:
+//! - Correct handling of **broadcasting** in element-wise operations
+//! - Full support for **Parameter nodes** (trainable weights)
+//! - **Graph-level** differentiation - gradients are computed symbolically
+//!
+//! ## Example
+//!
+//! ```ignore
+//! use rustyasg::autograd::Gradients;
+//!
+//! // Build forward graph (already done via Tensor API)
+//! let forward_graph = context.borrow().main_graph().clone();
+//!
+//! // Build gradient graph
+//! let grad_graph = Gradients::new(forward_graph)
+//!     .build(loss_node_id, &[weight_node_id, bias_node_id])
+//!     .unwrap();
+//!
+//! // Execute gradient graph on backend to get actual gradient values
+//! ```
+//!
+//! ## Supported Operations
+//!
+//! The autograd system supports gradients for:
+//! - Arithmetic: Add, Subtract, Multiply, Divide, Power
+//! - Matrix operations: MatrixMultiply
+//! - Activations: ReLU, Sigmoid, Tanh, Softmax, GELU, SiLU, LeakyReLU
+//! - Reductions: Sum
+//! - Convolutions: Conv2d
+//! - Normalization: LayerNorm (via composite operations)
 
 use crate::analysis::shape_inference::{ShapeInference, ShapeInferenceError};
 use crate::asg::{Asg, AsgError, NodeId, NodeType, Value};

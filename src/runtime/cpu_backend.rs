@@ -1,7 +1,38 @@
-//! Module implementing backend for executing ASG on CPU.
+//! # CPU Backend
 //!
-//! This backend traverses the computation graph (ASG) and for each node
-//! executes the corresponding operation using `ndarray`.
+//! This module implements the [`Backend`] trait for CPU execution using
+//! the [`ndarray`] library for tensor operations.
+//!
+//! ## Features
+//!
+//! - Pure Rust implementation with no external dependencies beyond ndarray
+//! - Recursive graph evaluation with memoization
+//! - Support for all ASG operations
+//! - Broadcasting for element-wise operations
+//! - Efficient matrix multiplication
+//!
+//! ## Supported Operations
+//!
+//! - **Arithmetic**: Add, Subtract, Multiply, Divide, Power
+//! - **Matrix**: MatrixMultiply
+//! - **Activations**: ReLU, Sigmoid, Tanh, Softmax, GELU, SiLU, LeakyReLU, ELU
+//! - **Element-wise**: Exp, Log, Sqrt, Abs, Neg, Clamp
+//! - **Reductions**: Sum
+//! - **Shape**: Reshape, Broadcast, Transpose
+//! - **Convolutions**: Conv2d (with stride, padding, dilation, groups)
+//! - **Gradient ops**: ReduceSumTo, Conv2dBackwardInput, Conv2dBackwardWeight
+//!
+//! ## Example
+//!
+//! ```ignore
+//! use rustyasg::runtime::cpu_backend::CpuBackend;
+//! use rustyasg::runtime::backend::Backend;
+//!
+//! let backend = CpuBackend::new();
+//! let device_data = backend.load_data(&input_values)?;
+//! let (outputs, memo) = backend.run(&graph, initial_memo)?;
+//! let results = backend.retrieve_data(&outputs)?;
+//! ```
 
 use super::backend::{Backend, Memo, RuntimeError};
 use crate::asg::{Asg, AsgId, NodeId, NodeType, Value};

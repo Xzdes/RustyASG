@@ -1,4 +1,44 @@
-//! Module defining the abstract interface (trait) for execution backends.
+//! # Backend Trait Module
+//!
+//! This module defines the abstract interface ([`Backend`] trait) that all
+//! execution backends must implement.
+//!
+//! ## Architecture
+//!
+//! RustyASG separates graph construction from execution through backends:
+//!
+//! ```text
+//! Graph Construction (Tensor API) -> ASG -> Backend -> Results
+//! ```
+//!
+//! ## Available Backends
+//!
+//! - [`CpuBackend`](super::cpu_backend::CpuBackend): Pure Rust CPU execution using ndarray
+//! - [`WgpuBackend`](super::wgpu_backend::WgpuBackend): GPU execution using WebGPU (wgpu)
+//!
+//! ## Example Usage
+//!
+//! ```ignore
+//! use rustyasg::runtime::backend::Backend;
+//! use rustyasg::runtime::cpu_backend::CpuBackend;
+//!
+//! let backend = CpuBackend::new();
+//!
+//! // Load input data to device
+//! let device_data = backend.load_data(&inputs)?;
+//!
+//! // Create initial memo with loaded data
+//! let mut memo = HashMap::new();
+//! for (name, tensor) in &tensors {
+//!     memo.insert((graph.id, tensor.node_id), device_data[name].clone());
+//! }
+//!
+//! // Execute graph
+//! let (outputs, _memo) = backend.run(&graph, memo)?;
+//!
+//! // Retrieve results back to CPU
+//! let results = backend.retrieve_data(&outputs)?;
+//! ```
 
 use crate::asg::{Asg, AsgId, NodeId, Value};
 use std::collections::HashMap;

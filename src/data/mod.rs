@@ -1,34 +1,48 @@
-// --- Файл: src/data/mod.rs ---
-
-//! Модуль для работы с данными: Dataset и DataLoader API.
+//! # Data Loading Module
 //!
-//! Предоставляет абстракции для загрузки и батчинга данных аналогично PyTorch.
+//! PyTorch-style Dataset and DataLoader API for efficient data handling.
 //!
-//! # Основные компоненты
+//! ## Key Components
 //!
-//! - **Dataset**: Трейт для определения источников данных
-//! - **DataLoader**: Итератор по батчам данных с поддержкой shuffle
-//! - **Sampler**: Стратегии сэмплирования данных
-//! - **Transform**: Преобразования данных
+//! - [`Dataset`]: Trait for defining data sources
+//! - [`DataLoader`]: Batched data iterator with shuffle support
+//! - [`Sampler`]: Data sampling strategies (sequential, random)
+//! - [`Transform`]: Data transformations (normalize, augmentation)
 //!
-//! # Пример использования
+//! ## Example
 //!
-//! ```rust,ignore
+//! ```ignore
 //! use rustyasg::data::{Dataset, DataLoader, InMemoryDataset};
 //!
-//! // Создаем датасет
+//! // Create dataset
 //! let dataset = InMemoryDataset::new(features, labels);
 //!
-//! // Создаем DataLoader
+//! // Create DataLoader
 //! let loader = DataLoader::new(dataset, 32)
 //!     .shuffle(true)
 //!     .drop_last(false);
 //!
-//! // Итерируем по батчам
+//! // Iterate over batches
 //! for (batch_x, batch_y) in loader.iter() {
-//!     // Обучение на батче
+//!     // Train on batch
 //! }
 //! ```
+//!
+//! ## Available Components
+//!
+//! ### Datasets
+//! - [`InMemoryDataset`]: In-memory dataset with features and labels
+//! - [`MapDataset`]: Dataset with transformation pipeline
+//!
+//! ### Samplers
+//! - [`SequentialSampler`]: Iterate in order
+//! - [`RandomSampler`]: Shuffle indices randomly
+//! - [`BatchSampler`]: Group indices into batches
+//!
+//! ### Transforms
+//! - [`Normalize`]: Normalize with mean and std
+//! - [`RandomNoise`]: Add random noise for augmentation
+//! - [`Compose`]: Chain multiple transforms
 
 pub mod dataset;
 pub mod dataloader;

@@ -1,12 +1,47 @@
-//! Module containing implementations of optimizers for updating model weights.
+//! # Optimizers Module
 //!
-//! Optimizers work with real numerical data (`Value`) on CPU.
-//! Includes:
-//! - SGD (Stochastic Gradient Descent) with momentum support
-//! - Adam (Adaptive Moment Estimation)
-//! - AdamW (Adam with decoupled weight decay)
-//! - RMSprop
-//! - Learning Rate Schedulers
+//! This module provides gradient-based optimization algorithms for training
+//! neural networks.
+//!
+//! ## Available Optimizers
+//!
+//! | Optimizer | Description | When to Use |
+//! |-----------|-------------|-------------|
+//! | [`Sgd`] | Classic SGD with momentum | Simple models, fine-tuning |
+//! | [`Adam`] | Adaptive moment estimation | Most use cases (default choice) |
+//! | [`AdamW`] | Adam with decoupled weight decay | Transformers, better regularization |
+//! | [`RMSprop`] | RMS propagation | RNNs, non-stationary objectives |
+//!
+//! ## Learning Rate Schedulers
+//!
+//! | Scheduler | Description |
+//! |-----------|-------------|
+//! | [`StepLR`] | Decay LR every N epochs |
+//! | [`ExponentialLR`] | Exponential decay |
+//! | [`CosineAnnealingLR`] | Cosine annealing |
+//! | [`LinearWarmupLR`] | Linear warmup phase |
+//! | [`WarmupCosineAnnealingLR`] | Warmup + cosine annealing |
+//!
+//! ## Gradient Utilities
+//!
+//! - [`clip_grad_norm`]: Clip gradients by global L2 norm
+//! - [`clip_grad_value`]: Clip gradients by absolute value
+//!
+//! ## Example
+//!
+//! ```ignore
+//! use rustyasg::optimizers::{Adam, Optimizer, clip_grad_norm};
+//!
+//! let mut optimizer = Adam::new(0.001)
+//!     .with_weight_decay(0.01);
+//!
+//! // Training loop
+//! for epoch in 0..epochs {
+//!     // Forward + backward pass (get gradients)
+//!     clip_grad_norm(&mut gradients, 1.0);  // Prevent exploding gradients
+//!     optimizer.step(&mut parameters, &gradients);
+//! }
+//! ```
 
 use crate::asg::Value;
 use ndarray::ArrayD;

@@ -1,8 +1,60 @@
-//! Module containing building blocks for neural networks.
+//! # Neural Network Layers Module
 //!
-//! In the graph-based architecture, each "layer" is a constructor
-//! that adds a specific pattern of nodes (operations and parameters)
-//! to the Abstract Semantic Graph (ASG).
+//! This module contains building blocks for constructing neural networks.
+//!
+//! In the graph-based architecture, each "layer" is a constructor that adds
+//! a specific pattern of nodes (operations and parameters) to the ASG.
+//!
+//! ## Available Layers
+//!
+//! ### Core Layers
+//! - [`Linear`]: Fully connected / dense layer
+//! - [`Conv2d`]: 2D convolution with configurable stride, padding, dilation
+//! - [`ConvTranspose2d`]: Transposed 2D convolution (deconvolution)
+//! - [`Embedding`]: Embedding lookup table
+//!
+//! ### Normalization
+//! - [`LayerNorm`]: Layer normalization
+//! - [`BatchNorm`]: Batch normalization
+//!
+//! ### Activations
+//! - [`ReLU`], [`LeakyReLU`], [`ELU`]: Rectified linear units
+//! - [`Sigmoid`], [`Tanh`]: Classic activations
+//! - [`GELU`], [`SiLU`]/[`Swish`]: Modern smooth activations
+//! - [`Softmax`], [`Softplus`]: Output activations
+//!
+//! ### Attention & Transformers
+//! - [`MultiHeadAttention`]: Multi-head self/cross attention
+//! - [`TransformerBlock`]: Complete transformer encoder block
+//! - [`FeedForward`]: Position-wise feed-forward network
+//!
+//! ### Positional Encodings
+//! - [`SinusoidalPositionalEncoding`]: Fixed sinusoidal encoding
+//! - [`LearnedPositionalEmbedding`]: Learnable position embeddings
+//! - [`RotaryPositionEmbedding`]: RoPE (used in LLaMA, etc.)
+//! - [`ALiBi`]: Attention with Linear Biases
+//!
+//! ### Pooling
+//! - [`MaxPool2d`], [`AvgPool2d`]: Standard pooling
+//! - [`GlobalAvgPool2d`], [`AdaptiveAvgPool2d`]: Global/adaptive pooling
+//!
+//! ### Regularization
+//! - [`Dropout`]: Standard dropout
+//! - [`SpatialDropout`]: Dropout for convolutional features
+//!
+//! ## Example
+//!
+//! ```ignore
+//! use rustyasg::nn::{Linear, ReLU, Module};
+//! use rustyasg::tensor::{GraphContext, Tensor};
+//!
+//! let ctx = Rc::new(RefCell::new(GraphContext::new()));
+//! let linear = Linear::new(&ctx, "fc1", 784, 128);
+//! let relu = ReLU;
+//!
+//! let x = Tensor::new_input(&ctx, "input");
+//! let h = relu.forward(&linear.forward(&x));
+//! ```
 
 // Declare all submodules
 pub mod activations;

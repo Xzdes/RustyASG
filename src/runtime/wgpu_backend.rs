@@ -1,54 +1,152 @@
-//! Модуль, реализующий GPU-бэкенд на базе wgpu с корректным WGSL.
+//! GPU backend implementation using wgpu (WebGPU).
 //!
-//! Все шейдеры переписаны без сокращений и соответствуют спецификации WGSL 1.0.
+//! This module provides GPU-accelerated tensor operations using the wgpu crate,
+//! which provides a cross-platform abstraction over Vulkan, Metal, DX12, and WebGPU.
+//!
+//! # Supported Operations
+//!
+//! The GPU backend supports most common neural network operations:
+//! - Element-wise: Add, Sub, Mul, Div, Neg, Abs, Exp, Log, Sqrt
+//! - Activations: ReLU, Sigmoid, Tanh, GELU, SiLU, LeakyReLU, Softmax
+//! - Matrix operations: MatMul (including batched)
+//! - Reductions: Sum, Mean, Variance
+//! - Convolutions: Conv2d (stride, padding)
+//! - Shape operations: Transpose, Reshape, Broadcast
+//!
+//! # Example
+//!
+//! ```ignore
+//! use rustyasg::runtime::wgpu_backend::WgpuBackend;
+//! use rustyasg::runtime::backend::Backend;
+//!
+//! // Create GPU backend (async)
+//! let backend = pollster::block_on(WgpuBackend::new());
+//!
+//! // Load data to GPU
+//! let device_data = backend.load_data(&data)?;
+//!
+//! // Run computation graph
+//! let (results, memo) = backend.run(&graph, memo)?;
+//!
+//! // Retrieve results back to CPU
+//! let cpu_results = backend.retrieve_data(&results)?;
+//! ```
+//!
+//! # Limitations
+//!
+//! - Conv2d: groups must be 1, dilation must be (1, 1)
+//! - Some operations may have lower precision than CPU due to GPU floating point handling
 
 use super::backend::{Backend, Memo, RuntimeError};
 use crate::asg::{Asg, NodeType, Shape, Value};
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
-/// Представление тензора в GPU-памяти.
+/// Represents a tensor stored in GPU memory.
+///
+/// This struct wraps a wgpu buffer and its associated shape information.
+/// The buffer contains f32 values in row-major (C-contiguous) order.
 #[derive(Debug)]
 pub struct GpuTensor {
+    /// The underlying GPU buffer containing tensor data
     buffer: wgpu::Buffer,
-    shape: Shape,
+    /// Shape of the tensor (e.g., [batch, channels, height, width])
+    pub shape: Shape,
 }
 
-/// GPU-бэкенд на базе wgpu.
+/// GPU backend using wgpu for accelerated tensor computations.
+///
+/// This backend executes computation graphs on the GPU using WebGPU/Vulkan/Metal/DX12.
+/// It compiles WGSL shaders at runtime for each operation type.
 pub struct WgpuBackend {
     device: wgpu::Device,
     queue: wgpu::Queue,
 }
 
+/// Error type for GPU initialization failures
+#[derive(Debug)]
+pub enum GpuInitError {
+    /// No suitable GPU adapter found
+    NoAdapter,
+    /// Failed to create device
+    DeviceCreationFailed(wgpu::RequestDeviceError),
+}
+
+impl std::fmt::Display for GpuInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GpuInitError::NoAdapter => write!(f, "No suitable GPU adapter found. Ensure you have a compatible GPU and drivers installed."),
+            GpuInitError::DeviceCreationFailed(e) => write!(f, "Failed to create GPU device: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for GpuInitError {}
+
 impl WgpuBackend {
+    /// Creates a new GPU backend asynchronously.
+    ///
+    /// This function requests a GPU adapter and device. It will panic if no
+    /// suitable GPU is found. For fallible initialization, use `try_new()`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no GPU adapter is available or device creation fails.
     pub async fn new() -> Self {
+        Self::try_new().await.expect("Failed to initialize GPU backend")
+    }
+
+    /// Attempts to create a new GPU backend, returning an error on failure.
+    ///
+    /// This is the fallible version of `new()` that allows handling GPU
+    /// initialization errors gracefully.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GpuInitError::NoAdapter` if no suitable GPU is found.
+    /// Returns `GpuInitError::DeviceCreationFailed` if device creation fails.
+    pub async fn try_new() -> Result<Self, GpuInitError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions::default())
             .await
-            .unwrap();
+            .ok_or(GpuInitError::NoAdapter)?;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default(), None)
             .await
-            .unwrap();
-        Self { device, queue }
+            .map_err(GpuInitError::DeviceCreationFailed)?;
+        Ok(Self { device, queue })
     }
 
-fn copy_buffer(&self, source: &wgpu::Buffer) -> wgpu::Buffer {
-    let size = source.size();
-    let dest = self.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("copy_buffer"),
-        size,
-        usage: wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_SRC
-            | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    encoder.copy_buffer_to_buffer(source, 0, &dest, 0, size);
-    self.queue.submit(Some(encoder.finish()));
-    dest
-}
+    /// Copies a GPU buffer to a new buffer.
+    fn copy_buffer(&self, source: &wgpu::Buffer) -> wgpu::Buffer {
+        let size = source.size();
+        let dest = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("copy_buffer"),
+            size,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_buffer_to_buffer(source, 0, &dest, 0, size);
+        self.queue.submit(Some(encoder.finish()));
+        dest
+    }
+
+    /// Helper to get tensor from memo with proper error handling.
+    #[inline]
+    fn get_tensor<'a>(
+        memo: &'a Memo<GpuTensor>,
+        asg_id: crate::asg::AsgId,
+        node_id: crate::asg::NodeId,
+    ) -> Result<&'a GpuTensor, RuntimeError> {
+        memo.get(&(asg_id, node_id))
+            .ok_or(RuntimeError::NodeNotFound(node_id, asg_id))
+    }
 
     fn dispatch_shader(
         &self,
@@ -121,7 +219,13 @@ impl Backend for WgpuBackend {
         let mut result = HashMap::new();
         for (name, value) in data {
             if let Value::Tensor(tensor) = value {
-                let bytes = bytemuck::cast_slice(tensor.as_slice().unwrap());
+                let slice = tensor.as_slice().ok_or_else(|| {
+                    RuntimeError::MemoryError(format!(
+                        "Tensor '{}' is not contiguous in memory",
+                        name
+                    ))
+                })?;
+                let bytes = bytemuck::cast_slice(slice);
                 let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(name.as_str()),
                     contents: bytes,
@@ -148,7 +252,9 @@ impl Backend for WgpuBackend {
             .map_err(|e| RuntimeError::ShapeError(format!("topological sort failed: {:?}", e)))?;
 
         for &node_id in &sorted_nodes {
-            let node = main_asg.get_node(node_id).unwrap();
+            let node = main_asg.get_node(node_id).map_err(|_| {
+                RuntimeError::NodeNotFound(node_id, main_asg.id)
+            })?;
             if memo.contains_key(&(main_asg.id, node_id)) {
                 continue;
             }
@@ -159,7 +265,10 @@ impl Backend for WgpuBackend {
 
             let output = match &node.node_type {
                 NodeType::Literal(Value::Tensor(data)) => {
-                    let bytes = bytemuck::cast_slice(data.as_slice().unwrap());
+                    let slice = data.as_slice().ok_or_else(|| {
+                        RuntimeError::MemoryError("Literal tensor is not contiguous".to_string())
+                    })?;
+                    let bytes = bytemuck::cast_slice(slice);
                     let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("literal"),
                         contents: bytes,
@@ -172,8 +281,8 @@ impl Backend for WgpuBackend {
                 }
                 
                 NodeType::Add(a, b) | NodeType::Subtract(a, b) | NodeType::Multiply(a, b) | NodeType::Divide(a, b) | NodeType::GreaterThan(a, b) => {
-                    let lhs = memo.get(&(main_asg.id, *a)).unwrap();
-                    let rhs = memo.get(&(main_asg.id, *b)).unwrap();
+                    let lhs = Self::get_tensor(&memo, main_asg.id, *a)?;
+                    let rhs = Self::get_tensor(&memo, main_asg.id, *b)?;
 
                     let op_char = match &node.node_type {
                         NodeType::Add(_, _) => "+",
@@ -221,7 +330,7 @@ impl Backend for WgpuBackend {
 
 
                 NodeType::Power(base_id, exp_id) => {
-                    let base = memo.get(&(main_asg.id, *base_id)).unwrap();
+                    let base = Self::get_tensor(&memo, main_asg.id, *base_id)?;
                     let exp_node_id = *exp_id;
 
                     // --- НАЧАЛО ИСПРАВЛЕНИЯ ---
@@ -268,15 +377,15 @@ impl Backend for WgpuBackend {
                     if is_square_op {
                         self.dispatch_shader(&shader, shape, &[base])?
                     } else {
-                        let exp = memo.get(&(main_asg.id, exp_node_id)).unwrap();
+                        let exp = Self::get_tensor(&memo, main_asg.id, exp_node_id)?;
                         self.dispatch_shader(&shader, shape, &[base, exp])?
                     }
                     // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
                 }
 
                 NodeType::MatrixMultiply(a, b) => {
-                    let lhs = memo.get(&(main_asg.id, *a)).unwrap();
-                    let rhs = memo.get(&(main_asg.id, *b)).unwrap();
+                    let lhs = Self::get_tensor(&memo, main_asg.id, *a)?;
+                    let rhs = Self::get_tensor(&memo, main_asg.id, *b)?;
 
                     let m = lhs.shape[lhs.shape.len() - 2];
                     let k = lhs.shape[lhs.shape.len() - 1];
@@ -371,7 +480,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::ReLU(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let shader = r#"
                         @group(0) @binding(0) var<storage, read> x: array<f32>;
                         @group(0) @binding(1) var<storage, read_write> o: array<f32>;
@@ -386,7 +495,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Sigmoid(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let shader = r#"
                         @group(0) @binding(0) var<storage, read> x: array<f32>;
                         @group(0) @binding(1) var<storage, read_write> o: array<f32>;
@@ -401,7 +510,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Tanh(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let shader = r#"
                         @group(0) @binding(0) var<storage, read> x: array<f32>;
                         @group(0) @binding(1) var<storage, read_write> o: array<f32>;
@@ -416,7 +525,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Exp(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let shader = r#"
                         @group(0) @binding(0) var<storage, read> x: array<f32>;
                         @group(0) @binding(1) var<storage, read_write> o: array<f32>;
@@ -431,7 +540,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Log(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let shader = r#"
                         @group(0) @binding(0) var<storage, read> x: array<f32>;
                         @group(0) @binding(1) var<storage, read_write> o: array<f32>;
@@ -446,7 +555,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Neg(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let shader = r#"
                         @group(0) @binding(0) var<storage, read> x: array<f32>;
                         @group(0) @binding(1) var<storage, read_write> o: array<f32>;
@@ -461,7 +570,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Abs(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let shader = r#"
                         @group(0) @binding(0) var<storage, read> x: array<f32>;
                         @group(0) @binding(1) var<storage, read_write> o: array<f32>;
@@ -476,7 +585,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Clamp(x, min_val, max_val) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let shader = format!(r#"
                         @group(0) @binding(0) var<storage, read> x: array<f32>;
                         @group(0) @binding(1) var<storage, read_write> o: array<f32>;
@@ -491,7 +600,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::LeakyReLU(x, alpha) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let shader = format!(r#"
                         @group(0) @binding(0) var<storage, read> x: array<f32>;
                         @group(0) @binding(1) var<storage, read_write> o: array<f32>;
@@ -507,7 +616,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::GELU(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     // GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
                     let shader = r#"
                         @group(0) @binding(0) var<storage, read> x: array<f32>;
@@ -525,7 +634,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::SiLU(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     // SiLU(x) = x * sigmoid(x) = x / (1 + exp(-x))
                     let shader = r#"
                         @group(0) @binding(0) var<storage, read> x: array<f32>;
@@ -542,7 +651,7 @@ impl Backend for WgpuBackend {
                 }
                 
                 NodeType::Sqrt(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let shader = r#"
                         @group(0) @binding(0) var<storage, read> x: array<f32>;
                         @group(0) @binding(1) var<storage, read_write> o: array<f32>;
@@ -557,7 +666,7 @@ impl Backend for WgpuBackend {
                 }
                 
                 NodeType::Softmax(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let last_dim = input.shape.last().copied().unwrap_or(1);
                     let outer_count = shape.iter().product::<usize>() / last_dim;
 
@@ -639,7 +748,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Sum(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let len = input.shape.iter().product::<usize>();
                     let shader = format!(
                         r#"
@@ -660,7 +769,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Mean(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let last_dim = input.shape.last().copied().unwrap_or(1);
                     let outer_count = input.shape.iter().rev().skip(1).product::<usize>();
 
@@ -688,7 +797,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Variance(x) => {
-                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *x)?;
                     let last_dim = input.shape.last().copied().unwrap_or(1);
                     let outer_count = input.shape.iter().rev().skip(1).product::<usize>();
 
@@ -724,7 +833,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Reshape(data_id, _shape_id) => {
-                    let data_tensor = memo.get(&(main_asg.id, *data_id)).unwrap();
+                    let data_tensor = Self::get_tensor(&memo, main_asg.id, *data_id)?;
                     GpuTensor {
                         buffer: self.copy_buffer(&data_tensor.buffer),
                         shape: shape.clone(),
@@ -732,7 +841,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Broadcast(source_id, _target_id) => {
-                    let source = memo.get(&(main_asg.id, *source_id)).unwrap();
+                    let source = Self::get_tensor(&memo, main_asg.id, *source_id)?;
                     let shader = r#"
                         @group(0) @binding(0) var<storage, read> src: array<f32>;
                         @group(0) @binding(1) var<storage, read_write> dst: array<f32>;
@@ -747,7 +856,7 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Transpose(data_id, ax1, ax2) => {
-                    let input = memo.get(&(main_asg.id, *data_id)).unwrap();
+                    let input = Self::get_tensor(&memo, main_asg.id, *data_id)?;
                     let rank = input.shape.len();
                     let total_out = shape.iter().product::<usize>();
 
@@ -819,8 +928,8 @@ impl Backend for WgpuBackend {
 
                 // ReduceSumTo - reduces gradient to match parameter shape
                 NodeType::ReduceSumTo(grad_id, target_id) => {
-                    let grad = memo.get(&(main_asg.id, *grad_id)).unwrap();
-                    let target = memo.get(&(main_asg.id, *target_id)).unwrap();
+                    let grad = Self::get_tensor(&memo, main_asg.id, *grad_id)?;
+                    let target = Self::get_tensor(&memo, main_asg.id, *target_id)?;
                     let grad_shape = &grad.shape;
                     let target_shape = &target.shape;
                     let out_size: usize = target_shape.iter().product();
@@ -866,8 +975,8 @@ impl Backend for WgpuBackend {
                         ));
                     }
 
-                    let input_tensor = memo.get(&(main_asg.id, *input)).unwrap();
-                    let weight_tensor = memo.get(&(main_asg.id, *weight)).unwrap();
+                    let input_tensor = Self::get_tensor(&memo, main_asg.id, *input)?;
+                    let weight_tensor = Self::get_tensor(&memo, main_asg.id, *weight)?;
 
                     // Input: [N, C_in, H_in, W_in]
                     // Weight: [C_out, C_in, kH, kW]
@@ -996,7 +1105,7 @@ impl Backend for WgpuBackend {
 
                     // Handle bias if present
                     let result = if let Some(bias_id) = bias {
-                        let bias_tensor = memo.get(&(main_asg.id, *bias_id)).unwrap();
+                        let bias_tensor = Self::get_tensor(&memo, main_asg.id, *bias_id)?;
 
                         // Add bias: output[n, oc, oh, ow] += bias[oc]
                         let bias_shader = format!(
@@ -1089,7 +1198,7 @@ impl Backend for WgpuBackend {
 
         let mut outputs = Vec::new();
         for &node_id in &main_asg.outputs {
-            let tensor = memo.get(&(main_asg.id, node_id)).unwrap();
+            let tensor = Self::get_tensor(&memo, main_asg.id, node_id)?;
             let buffer = self.copy_buffer(&tensor.buffer);
             outputs.push(GpuTensor {
                 buffer,
@@ -1114,19 +1223,27 @@ impl Backend for WgpuBackend {
                 mapped_at_creation: false,
             });
 
-            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             encoder.copy_buffer_to_buffer(&tensor.buffer, 0, &staging_buffer, 0, buffer_size);
             self.queue.submit(Some(encoder.finish()));
 
             let buffer_slice = staging_buffer.slice(..);
             let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
-            buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+            buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
+                let _ = sender.send(v);
+            });
             self.device.poll(wgpu::Maintain::Wait);
-            pollster::block_on(receiver.receive()).unwrap().unwrap();
+
+            let map_result = pollster::block_on(receiver.receive())
+                .ok_or_else(|| RuntimeError::MemoryError("GPU buffer map failed".to_string()))?
+                .map_err(|e| RuntimeError::MemoryError(format!("GPU buffer map error: {:?}", e)))?;
 
             let data = buffer_slice.get_mapped_range();
             let slice: &[f32] = bytemuck::cast_slice(&data);
-            let array = ndarray::ArrayD::from_shape_vec(tensor.shape.clone(), slice.to_vec()).unwrap();
+            let array = ndarray::ArrayD::from_shape_vec(tensor.shape.clone(), slice.to_vec())
+                .map_err(|e| RuntimeError::ShapeError(format!("Failed to create array: {}", e)))?;
             drop(data);
             staging_buffer.unmap();
 
