@@ -384,6 +384,162 @@ impl Backend for WgpuBackend {
                     "#;
                     self.dispatch_shader(shader, shape, &[input])?
                 }
+
+                NodeType::Sigmoid(x) => {
+                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let shader = r#"
+                        @group(0) @binding(0) var<storage, read> x: array<f32>;
+                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
+                        @compute @workgroup_size(64)
+                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                            let idx = id.x;
+                            if (idx >= arrayLength(&o)) { return; }
+                            o[idx] = 1.0 / (1.0 + exp(-x[idx]));
+                        }
+                    "#;
+                    self.dispatch_shader(shader, shape, &[input])?
+                }
+
+                NodeType::Tanh(x) => {
+                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let shader = r#"
+                        @group(0) @binding(0) var<storage, read> x: array<f32>;
+                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
+                        @compute @workgroup_size(64)
+                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                            let idx = id.x;
+                            if (idx >= arrayLength(&o)) { return; }
+                            o[idx] = tanh(x[idx]);
+                        }
+                    "#;
+                    self.dispatch_shader(shader, shape, &[input])?
+                }
+
+                NodeType::Exp(x) => {
+                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let shader = r#"
+                        @group(0) @binding(0) var<storage, read> x: array<f32>;
+                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
+                        @compute @workgroup_size(64)
+                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                            let idx = id.x;
+                            if (idx >= arrayLength(&o)) { return; }
+                            o[idx] = exp(x[idx]);
+                        }
+                    "#;
+                    self.dispatch_shader(shader, shape, &[input])?
+                }
+
+                NodeType::Log(x) => {
+                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let shader = r#"
+                        @group(0) @binding(0) var<storage, read> x: array<f32>;
+                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
+                        @compute @workgroup_size(64)
+                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                            let idx = id.x;
+                            if (idx >= arrayLength(&o)) { return; }
+                            o[idx] = log(x[idx]);
+                        }
+                    "#;
+                    self.dispatch_shader(shader, shape, &[input])?
+                }
+
+                NodeType::Neg(x) => {
+                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let shader = r#"
+                        @group(0) @binding(0) var<storage, read> x: array<f32>;
+                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
+                        @compute @workgroup_size(64)
+                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                            let idx = id.x;
+                            if (idx >= arrayLength(&o)) { return; }
+                            o[idx] = -x[idx];
+                        }
+                    "#;
+                    self.dispatch_shader(shader, shape, &[input])?
+                }
+
+                NodeType::Abs(x) => {
+                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let shader = r#"
+                        @group(0) @binding(0) var<storage, read> x: array<f32>;
+                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
+                        @compute @workgroup_size(64)
+                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                            let idx = id.x;
+                            if (idx >= arrayLength(&o)) { return; }
+                            o[idx] = abs(x[idx]);
+                        }
+                    "#;
+                    self.dispatch_shader(shader, shape, &[input])?
+                }
+
+                NodeType::Clamp(x, min_val, max_val) => {
+                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let shader = format!(r#"
+                        @group(0) @binding(0) var<storage, read> x: array<f32>;
+                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
+                        @compute @workgroup_size(64)
+                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+                            let idx = id.x;
+                            if (idx >= arrayLength(&o)) {{ return; }}
+                            o[idx] = clamp(x[idx], {min_val}f, {max_val}f);
+                        }}
+                    "#, min_val = min_val, max_val = max_val);
+                    self.dispatch_shader(&shader, shape, &[input])?
+                }
+
+                NodeType::LeakyReLU(x, alpha) => {
+                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    let shader = format!(r#"
+                        @group(0) @binding(0) var<storage, read> x: array<f32>;
+                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
+                        @compute @workgroup_size(64)
+                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+                            let idx = id.x;
+                            if (idx >= arrayLength(&o)) {{ return; }}
+                            let val = x[idx];
+                            o[idx] = select({alpha}f * val, val, val > 0.0);
+                        }}
+                    "#, alpha = alpha);
+                    self.dispatch_shader(&shader, shape, &[input])?
+                }
+
+                NodeType::GELU(x) => {
+                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    // GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
+                    let shader = r#"
+                        @group(0) @binding(0) var<storage, read> x: array<f32>;
+                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
+                        @compute @workgroup_size(64)
+                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                            let idx = id.x;
+                            if (idx >= arrayLength(&o)) { return; }
+                            let val = x[idx];
+                            let cdf = 0.5 * (1.0 + tanh(0.7978845608 * (val + 0.044715 * val * val * val)));
+                            o[idx] = val * cdf;
+                        }
+                    "#;
+                    self.dispatch_shader(shader, shape, &[input])?
+                }
+
+                NodeType::SiLU(x) => {
+                    let input = memo.get(&(main_asg.id, *x)).unwrap();
+                    // SiLU(x) = x * sigmoid(x) = x / (1 + exp(-x))
+                    let shader = r#"
+                        @group(0) @binding(0) var<storage, read> x: array<f32>;
+                        @group(0) @binding(1) var<storage, read_write> o: array<f32>;
+                        @compute @workgroup_size(64)
+                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                            let idx = id.x;
+                            if (idx >= arrayLength(&o)) { return; }
+                            let val = x[idx];
+                            o[idx] = val / (1.0 + exp(-val));
+                        }
+                    "#;
+                    self.dispatch_shader(shader, shape, &[input])?
+                }
                 
                 NodeType::Sqrt(x) => {
                     let input = memo.get(&(main_asg.id, *x)).unwrap();
@@ -609,6 +765,47 @@ impl Backend for WgpuBackend {
                     GpuTensor {
                         buffer: self.copy_buffer(&tensor.buffer),
                         shape: tensor.shape.clone(),
+                    }
+                }
+
+                // Input and Parameter nodes are already in memo from load_data
+                NodeType::Input { .. } | NodeType::Parameter { .. } => {
+                    continue;
+                }
+
+                // ReduceSumTo - reduces gradient to match parameter shape
+                NodeType::ReduceSumTo(grad_id, target_id) => {
+                    let grad = memo.get(&(main_asg.id, *grad_id)).unwrap();
+                    let target = memo.get(&(main_asg.id, *target_id)).unwrap();
+                    let grad_shape = &grad.shape;
+                    let target_shape = &target.shape;
+                    let out_size: usize = target_shape.iter().product();
+                    let in_size: usize = grad_shape.iter().product();
+
+                    if in_size == out_size && grad_shape == target_shape {
+                        // Shapes match - just copy
+                        GpuTensor {
+                            buffer: self.copy_buffer(&grad.buffer),
+                            shape: target_shape.clone(),
+                        }
+                    } else {
+                        // Need to reduce by summing
+                        let repeat_factor = in_size / out_size.max(1);
+                        let shader = format!(r#"
+                            @group(0) @binding(0) var<storage, read> grad: array<f32>;
+                            @group(0) @binding(1) var<storage, read_write> out: array<f32>;
+                            @compute @workgroup_size(64)
+                            fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+                                let out_idx = id.x;
+                                if (out_idx >= {out_size}u) {{ return; }}
+                                var sum = 0.0;
+                                for (var i = 0u; i < {repeat}u; i = i + 1u) {{
+                                    sum = sum + grad[out_idx + i * {out_size}u];
+                                }}
+                                out[out_idx] = sum;
+                            }}
+                        "#, out_size = out_size, repeat = repeat_factor);
+                        self.dispatch_shader(&shader, target_shape, &[grad])?
                     }
                 }
 
