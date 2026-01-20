@@ -185,6 +185,43 @@ impl<'a> ExecutionContext<'a> {
                 op_embedding_grad(grad_val, indices_val, *num_embeddings)
             }
 
+            NodeType::Conv2dBackwardInput { grad_output, weight, input_shape, stride, padding, dilation, groups } => {
+                let grad_val = self.evaluate_node(asg_id, *grad_output)?;
+                let weight_val = self.evaluate_node(asg_id, *weight)?;
+                op_conv2d_backward_input(grad_val, weight_val, *input_shape, *stride, *padding, *dilation, *groups)
+            }
+
+            NodeType::Conv2dBackwardWeight { grad_output, input, weight_shape, stride, padding, dilation, groups } => {
+                let grad_val = self.evaluate_node(asg_id, *grad_output)?;
+                let input_val = self.evaluate_node(asg_id, *input)?;
+                op_conv2d_backward_weight(grad_val, input_val, *weight_shape, *stride, *padding, *dilation, *groups)
+            }
+
+            NodeType::LayerNorm { input, gamma, beta, eps } => {
+                let input_val = self.evaluate_node(asg_id, *input)?;
+                let gamma_val = self.evaluate_node(asg_id, *gamma)?;
+                let beta_val = self.evaluate_node(asg_id, *beta)?;
+                op_layer_norm(input_val, gamma_val, beta_val, *eps)
+            }
+
+            NodeType::LayerNormBackward { grad_output, input, gamma, eps } => {
+                let grad_val = self.evaluate_node(asg_id, *grad_output)?;
+                let input_val = self.evaluate_node(asg_id, *input)?;
+                let gamma_val = self.evaluate_node(asg_id, *gamma)?;
+                op_layer_norm_backward(grad_val, input_val, gamma_val, *eps)
+            }
+
+            NodeType::LayerNormGradGamma { grad_output, input, eps } => {
+                let grad_val = self.evaluate_node(asg_id, *grad_output)?;
+                let input_val = self.evaluate_node(asg_id, *input)?;
+                op_layer_norm_grad_gamma(grad_val, input_val, *eps)
+            }
+
+            NodeType::LayerNormGradBeta { grad_output } => {
+                let grad_val = self.evaluate_node(asg_id, *grad_output)?;
+                op_layer_norm_grad_beta(grad_val)
+            }
+
             _ => Err(RuntimeError::UnimplementedOperation(format!("{:?}", node.node_type))),
         }?;
 
@@ -962,6 +999,419 @@ fn op_embedding_grad(
             output[[idx, j]] += grad_arr.as_slice().unwrap()[i * embedding_dim + j];
         }
     }
+
+    Ok(Value::Tensor(output))
+}
+
+/// Conv2d backward pass for input gradient.
+/// Implemented as transposed convolution (full convolution with flipped kernel).
+/// grad_output: [N, C_out, H_out, W_out]
+/// weight: [C_out, C_in/groups, kH, kW]
+/// output: [N, C_in, H_in, W_in]
+fn op_conv2d_backward_input(
+    grad_output: Value,
+    weight: Value,
+    input_shape: (usize, usize, usize, usize),
+    stride: (usize, usize),
+    padding: (usize, usize),
+    dilation: (usize, usize),
+    groups: usize,
+) -> Result<Value, RuntimeError> {
+    let grad_arr: Array4<f32> = match grad_output {
+        Value::Tensor(val) => val.into_dimensionality()
+            .map_err(|e| RuntimeError::ShapeError(format!("Conv2dBackwardInput grad: {}", e)))?,
+        _ => return Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string()
+        }),
+    };
+
+    let weight_arr: Array4<f32> = match weight {
+        Value::Tensor(val) => val.into_dimensionality()
+            .map_err(|e| RuntimeError::ShapeError(format!("Conv2dBackwardInput weight: {}", e)))?,
+        _ => return Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string()
+        }),
+    };
+
+    let (batch_size, out_channels, out_h, out_w) = grad_arr.dim();
+    let (_, c_in_per_group, kernel_h, kernel_w) = weight_arr.dim();
+    let (_, in_channels, in_h, in_w) = input_shape;
+    let (stride_h, stride_w) = stride;
+    let (pad_h, pad_w) = padding;
+    let (dil_h, dil_w) = dilation;
+
+    let mut grad_input = Array4::<f32>::zeros((batch_size, in_channels, in_h, in_w));
+
+    let out_channels_per_group = out_channels / groups;
+    let in_channels_per_group = in_channels / groups;
+
+    // Backward input: for each position in grad_output, distribute to corresponding input positions
+    for n in 0..batch_size {
+        for g in 0..groups {
+            let in_ch_start = g * in_channels_per_group;
+            let out_ch_start = g * out_channels_per_group;
+
+            for oc_rel in 0..out_channels_per_group {
+                let oc = out_ch_start + oc_rel;
+                for oh in 0..out_h {
+                    for ow in 0..out_w {
+                        let grad_val = grad_arr[[n, oc, oh, ow]];
+
+                        for ic_rel in 0..c_in_per_group {
+                            let ic = in_ch_start + ic_rel;
+                            for kh in 0..kernel_h {
+                                for kw in 0..kernel_w {
+                                    // Compute input position
+                                    let ih_base = oh * stride_h + kh * dil_h;
+                                    let iw_base = ow * stride_w + kw * dil_w;
+
+                                    if ih_base >= pad_h && iw_base >= pad_w {
+                                        let ih = ih_base - pad_h;
+                                        let iw = iw_base - pad_w;
+
+                                        if ih < in_h && iw < in_w {
+                                            grad_input[[n, ic, ih, iw]] +=
+                                                grad_val * weight_arr[[oc, ic_rel, kh, kw]];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Value::Tensor(grad_input.into_dyn()))
+}
+
+/// Conv2d backward pass for weight gradient.
+/// grad_output: [N, C_out, H_out, W_out]
+/// input: [N, C_in, H_in, W_in]
+/// output: [C_out, C_in/groups, kH, kW]
+fn op_conv2d_backward_weight(
+    grad_output: Value,
+    input: Value,
+    weight_shape: (usize, usize, usize, usize),
+    stride: (usize, usize),
+    padding: (usize, usize),
+    dilation: (usize, usize),
+    groups: usize,
+) -> Result<Value, RuntimeError> {
+    let grad_arr: Array4<f32> = match grad_output {
+        Value::Tensor(val) => val.into_dimensionality()
+            .map_err(|e| RuntimeError::ShapeError(format!("Conv2dBackwardWeight grad: {}", e)))?,
+        _ => return Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string()
+        }),
+    };
+
+    let input_arr: Array4<f32> = match input {
+        Value::Tensor(val) => val.into_dimensionality()
+            .map_err(|e| RuntimeError::ShapeError(format!("Conv2dBackwardWeight input: {}", e)))?,
+        _ => return Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string()
+        }),
+    };
+
+    let (batch_size, _, out_h, out_w) = grad_arr.dim();
+    let (_, in_channels, in_h, in_w) = input_arr.dim();
+    let (out_channels, c_in_per_group, kernel_h, kernel_w) = weight_shape;
+    let (stride_h, stride_w) = stride;
+    let (pad_h, pad_w) = padding;
+    let (dil_h, dil_w) = dilation;
+
+    let mut grad_weight = Array4::<f32>::zeros((out_channels, c_in_per_group, kernel_h, kernel_w));
+
+    let out_channels_per_group = out_channels / groups;
+    let in_channels_per_group = in_channels / groups;
+
+    // For each output position, accumulate gradient for corresponding weight element
+    for n in 0..batch_size {
+        for g in 0..groups {
+            let in_ch_start = g * in_channels_per_group;
+            let out_ch_start = g * out_channels_per_group;
+
+            for oc_rel in 0..out_channels_per_group {
+                let oc = out_ch_start + oc_rel;
+                for oh in 0..out_h {
+                    for ow in 0..out_w {
+                        let grad_val = grad_arr[[n, oc, oh, ow]];
+
+                        for ic_rel in 0..c_in_per_group {
+                            let ic = in_ch_start + ic_rel;
+                            for kh in 0..kernel_h {
+                                for kw in 0..kernel_w {
+                                    let ih_base = oh * stride_h + kh * dil_h;
+                                    let iw_base = ow * stride_w + kw * dil_w;
+
+                                    if ih_base >= pad_h && iw_base >= pad_w {
+                                        let ih = ih_base - pad_h;
+                                        let iw = iw_base - pad_w;
+
+                                        if ih < in_h && iw < in_w {
+                                            grad_weight[[oc, ic_rel, kh, kw]] +=
+                                                grad_val * input_arr[[n, ic, ih, iw]];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Value::Tensor(grad_weight.into_dyn()))
+}
+
+/// Layer Normalization: y = gamma * (x - mean) / sqrt(var + eps) + beta
+/// Нормализация происходит по последней оси.
+fn op_layer_norm(
+    input: Value,
+    gamma: Value,
+    beta: Value,
+    eps: f32,
+) -> Result<Value, RuntimeError> {
+    let x = match input {
+        Value::Tensor(t) => t,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNorm input".into() }),
+    };
+    let gamma_arr = match gamma {
+        Value::Tensor(t) => t,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNorm gamma".into() }),
+    };
+    let beta_arr = match beta {
+        Value::Tensor(t) => t,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNorm beta".into() }),
+    };
+
+    let shape = x.shape();
+    let ndim = shape.len();
+    let norm_size = shape[ndim - 1];
+    let batch_size: usize = shape.iter().take(ndim - 1).product();
+
+    // Reshape to [batch, norm_size]
+    let x_2d = x.clone().into_shape_with_order((batch_size, norm_size))
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+
+    let mut output = ndarray::ArrayD::<f32>::zeros(shape.to_vec());
+    let mut out_2d = output.view_mut().into_shape_with_order((batch_size, norm_size))
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+
+    // Flatten gamma and beta
+    let gamma_flat: Vec<f32> = gamma_arr.iter().copied().collect();
+    let beta_flat: Vec<f32> = beta_arr.iter().copied().collect();
+
+    for (_i, (x_row, mut out_row)) in x_2d.rows().into_iter()
+        .zip(out_2d.rows_mut())
+        .enumerate()
+    {
+        // Compute mean
+        let mean: f32 = x_row.iter().sum::<f32>() / norm_size as f32;
+
+        // Compute variance
+        let var: f32 = x_row.iter()
+            .map(|&v| (v - mean) * (v - mean))
+            .sum::<f32>() / norm_size as f32;
+
+        let std = (var + eps).sqrt();
+
+        // Normalize and scale
+        for (j, (&x_val, out_val)) in x_row.iter().zip(out_row.iter_mut()).enumerate() {
+            let normalized = (x_val - mean) / std;
+            *out_val = normalized * gamma_flat[j % gamma_flat.len()] + beta_flat[j % beta_flat.len()];
+        }
+    }
+
+    Ok(Value::Tensor(output))
+}
+
+/// Backward pass для LayerNorm по входу x.
+///
+/// Формула градиента:
+/// dx = (1/σ) * (dy * γ - mean(dy * γ) - x_norm * mean(dy * γ * x_norm))
+///
+/// где:
+/// - dy = grad_output
+/// - γ = gamma
+/// - x_norm = (x - mean) / σ
+/// - σ = sqrt(var + eps)
+fn op_layer_norm_backward(
+    grad_output: Value,
+    input: Value,
+    gamma: Value,
+    eps: f32,
+) -> Result<Value, RuntimeError> {
+    let dy = match grad_output {
+        Value::Tensor(t) => t,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNormBackward grad_output".into() }),
+    };
+    let x = match input {
+        Value::Tensor(t) => t,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNormBackward input".into() }),
+    };
+    let gamma_arr = match gamma {
+        Value::Tensor(t) => t,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNormBackward gamma".into() }),
+    };
+
+    let shape = x.shape();
+    let ndim = shape.len();
+    let n = shape[ndim - 1] as f32;  // размер нормализации
+    let batch_size: usize = shape.iter().take(ndim - 1).product();
+
+    // Reshape to [batch, norm_size]
+    let norm_size = shape[ndim - 1];
+    let x_2d = x.clone().into_shape_with_order((batch_size, norm_size))
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+    let dy_2d = dy.clone().into_shape_with_order((batch_size, norm_size))
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+
+    let mut dx = ndarray::ArrayD::<f32>::zeros(shape.to_vec());
+    let mut dx_2d = dx.view_mut().into_shape_with_order((batch_size, norm_size))
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+
+    // Flatten gamma
+    let gamma_flat: Vec<f32> = gamma_arr.iter().copied().collect();
+
+    for (x_row, (dy_row, mut dx_row)) in x_2d.rows().into_iter()
+        .zip(dy_2d.rows().into_iter().zip(dx_2d.rows_mut()))
+    {
+        // Compute mean and std of x
+        let mean: f32 = x_row.iter().sum::<f32>() / n;
+        let var: f32 = x_row.iter()
+            .map(|&v| (v - mean) * (v - mean))
+            .sum::<f32>() / n;
+        let std = (var + eps).sqrt();
+        let inv_std = 1.0 / std;
+
+        // Compute x_norm = (x - mean) / std
+        let x_norm: Vec<f32> = x_row.iter()
+            .map(|&v| (v - mean) * inv_std)
+            .collect();
+
+        // Compute dy * gamma
+        let dy_gamma: Vec<f32> = dy_row.iter()
+            .enumerate()
+            .map(|(j, &dy_val)| dy_val * gamma_flat[j % gamma_flat.len()])
+            .collect();
+
+        // Compute mean(dy * gamma)
+        let mean_dy_gamma: f32 = dy_gamma.iter().sum::<f32>() / n;
+
+        // Compute mean(dy * gamma * x_norm)
+        let mean_dy_gamma_xnorm: f32 = dy_gamma.iter()
+            .zip(x_norm.iter())
+            .map(|(&dg, &xn)| dg * xn)
+            .sum::<f32>() / n;
+
+        // dx = inv_std * (dy_gamma - mean_dy_gamma - x_norm * mean_dy_gamma_xnorm)
+        for (j, dx_val) in dx_row.iter_mut().enumerate() {
+            *dx_val = inv_std * (dy_gamma[j] - mean_dy_gamma - x_norm[j] * mean_dy_gamma_xnorm);
+        }
+    }
+
+    Ok(Value::Tensor(dx))
+}
+
+/// Градиент LayerNorm по параметру gamma.
+/// grad_gamma = sum(grad_output * x_normalized, axis=batch)
+/// Выход имеет форму [1, norm_size] (такую же как gamma).
+fn op_layer_norm_grad_gamma(
+    grad_output: Value,
+    input: Value,
+    eps: f32,
+) -> Result<Value, RuntimeError> {
+    let dy = match grad_output {
+        Value::Tensor(t) => t,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNormGradGamma grad_output".into() }),
+    };
+    let x = match input {
+        Value::Tensor(t) => t,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNormGradGamma input".into() }),
+    };
+
+    let shape = x.shape();
+    let ndim = shape.len();
+    let norm_size = shape[ndim - 1];
+    let batch_size: usize = shape.iter().take(ndim - 1).product();
+
+    // Reshape to [batch, norm_size]
+    let x_2d = x.clone().into_shape_with_order((batch_size, norm_size))
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+    let dy_2d = dy.clone().into_shape_with_order((batch_size, norm_size))
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+
+    // grad_gamma has shape [1, norm_size]
+    let mut grad_gamma = vec![0.0f32; norm_size];
+
+    for (x_row, dy_row) in x_2d.rows().into_iter().zip(dy_2d.rows().into_iter()) {
+        // Compute mean and std of x
+        let n = norm_size as f32;
+        let mean: f32 = x_row.iter().sum::<f32>() / n;
+        let var: f32 = x_row.iter()
+            .map(|&v| (v - mean) * (v - mean))
+            .sum::<f32>() / n;
+        let std = (var + eps).sqrt();
+
+        // x_normalized = (x - mean) / std
+        // grad_gamma += dy * x_normalized
+        for (j, (&x_val, &dy_val)) in x_row.iter().zip(dy_row.iter()).enumerate() {
+            let x_norm = (x_val - mean) / std;
+            grad_gamma[j] += dy_val * x_norm;
+        }
+    }
+
+    // Output shape: [1, norm_size]
+    let output = ndarray::ArrayD::from_shape_vec(
+        ndarray::IxDyn(&[1, norm_size]),
+        grad_gamma
+    ).map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+
+    Ok(Value::Tensor(output))
+}
+
+/// Градиент LayerNorm по параметру beta.
+/// grad_beta = sum(grad_output, axis=batch)
+/// Выход имеет форму [1, norm_size] (такую же как beta).
+fn op_layer_norm_grad_beta(
+    grad_output: Value,
+) -> Result<Value, RuntimeError> {
+    let dy = match grad_output {
+        Value::Tensor(t) => t,
+        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNormGradBeta grad_output".into() }),
+    };
+
+    let shape = dy.shape();
+    let ndim = shape.len();
+    let norm_size = shape[ndim - 1];
+    let batch_size: usize = shape.iter().take(ndim - 1).product();
+
+    // Reshape to [batch, norm_size]
+    let dy_2d = dy.clone().into_shape_with_order((batch_size, norm_size))
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+
+    // grad_beta has shape [1, norm_size]
+    let mut grad_beta = vec![0.0f32; norm_size];
+
+    for dy_row in dy_2d.rows().into_iter() {
+        for (j, &dy_val) in dy_row.iter().enumerate() {
+            grad_beta[j] += dy_val;
+        }
+    }
+
+    // Output shape: [1, norm_size]
+    let output = ndarray::ArrayD::from_shape_vec(
+        ndarray::IxDyn(&[1, norm_size]),
+        grad_beta
+    ).map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
 
     Ok(Value::Tensor(output))
 }

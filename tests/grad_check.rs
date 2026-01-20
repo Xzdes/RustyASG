@@ -2,14 +2,14 @@
 //! Проверка корректности обратного прохода численным дифференцированием.
 
 use rustyasg::analysis::shape_inference::ShapeInference;
-use rustyasg::asg::{DType, Value};
+use rustyasg::asg::{DType, NodeType, Value};
 use rustyasg::autograd::Gradients;
 use rustyasg::nn::{LayerNorm, Module};
 use rustyasg::runtime::backend::Backend;
 use rustyasg::runtime::cpu_backend::CpuBackend;
 use rustyasg::tensor::{GraphContext, Tensor};
 
-use ndarray::{array, ArrayD};
+use ndarray::{array, Array4, ArrayD};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -142,7 +142,6 @@ impl GradTest {
 }
 
 #[test]
-#[ignore] // TODO: LayerNorm autograd требует архитектурных изменений
 fn grad_layernorm_x() {
     let inputs: HashMap<String, ArrayD<f32>> = [
         ("x", array![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),
@@ -222,6 +221,184 @@ fn grad_layernorm_beta() {
         }),
         inputs,
         wrt: "beta".into(),
+    }
+    .run();
+}
+
+// ============================================================
+// Conv2d Autograd Tests
+// ============================================================
+
+/// Создание Conv2d через NodeType напрямую в графе
+fn create_conv2d(
+    ctx: &Rc<RefCell<GraphContext>>,
+    input: &Tensor,
+    weight: &Tensor,
+    stride: (usize, usize),
+    padding: (usize, usize),
+) -> Tensor {
+    let node_id = ctx.borrow_mut().main_graph_mut().add_node(
+        None,
+        NodeType::Conv2d {
+            input: input.node_id,
+            weight: weight.node_id,
+            bias: None,
+            stride,
+            padding,
+            dilation: (1, 1),
+            groups: 1,
+        },
+    );
+    Tensor { node_id, context: Rc::clone(ctx) }
+}
+
+#[test]
+fn grad_conv2d_weight() {
+    // Input: [1, 1, 4, 4], Weight: [1, 1, 3, 3]
+    // Simple 3x3 convolution on 4x4 input
+    let input_data = Array4::<f32>::from_shape_fn((1, 1, 4, 4), |(_, _, h, w)| {
+        (h * 4 + w) as f32 / 16.0
+    }).into_dyn();
+
+    let weight_data = Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| {
+        (h * 3 + w + 1) as f32 / 10.0
+    }).into_dyn();
+
+    let inputs: HashMap<String, ArrayD<f32>> = [
+        ("input".to_string(), input_data),
+        ("weight".to_string(), weight_data),
+    ].into_iter().collect();
+
+    GradTest {
+        builder: Box::new(|t| {
+            let ctx = t.values().next().unwrap().context.clone();
+            let input = &t["input"];
+            let weight = &t["weight"];
+            let output = create_conv2d(&ctx, input, weight, (1, 1), (0, 0));
+            output.sum()
+        }),
+        inputs,
+        wrt: "weight".into(),
+    }
+    .run();
+}
+
+#[test]
+fn grad_conv2d_input() {
+    // Input: [1, 1, 4, 4], Weight: [1, 1, 3, 3]
+    let input_data = Array4::<f32>::from_shape_fn((1, 1, 4, 4), |(_, _, h, w)| {
+        (h * 4 + w) as f32 / 16.0
+    }).into_dyn();
+
+    let weight_data = Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| {
+        (h * 3 + w + 1) as f32 / 10.0
+    }).into_dyn();
+
+    let inputs: HashMap<String, ArrayD<f32>> = [
+        ("input".to_string(), input_data),
+        ("weight".to_string(), weight_data),
+    ].into_iter().collect();
+
+    GradTest {
+        builder: Box::new(|t| {
+            let ctx = t.values().next().unwrap().context.clone();
+            let input = &t["input"];
+            let weight = &t["weight"];
+            let output = create_conv2d(&ctx, input, weight, (1, 1), (0, 0));
+            output.sum()
+        }),
+        inputs,
+        wrt: "input".into(),
+    }
+    .run();
+}
+
+#[test]
+fn grad_conv2d_with_padding() {
+    // Test convolution with padding
+    let input_data = Array4::<f32>::from_shape_fn((1, 1, 4, 4), |(_, _, h, w)| {
+        (h * 4 + w + 1) as f32 / 16.0
+    }).into_dyn();
+
+    let weight_data = Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| {
+        (h * 3 + w + 1) as f32 / 10.0
+    }).into_dyn();
+
+    let inputs: HashMap<String, ArrayD<f32>> = [
+        ("input".to_string(), input_data),
+        ("weight".to_string(), weight_data),
+    ].into_iter().collect();
+
+    GradTest {
+        builder: Box::new(|t| {
+            let ctx = t.values().next().unwrap().context.clone();
+            let input = &t["input"];
+            let weight = &t["weight"];
+            let output = create_conv2d(&ctx, input, weight, (1, 1), (1, 1));
+            output.sum()
+        }),
+        inputs,
+        wrt: "weight".into(),
+    }
+    .run();
+}
+
+#[test]
+fn grad_conv2d_with_stride() {
+    // Test convolution with stride
+    let input_data = Array4::<f32>::from_shape_fn((1, 1, 6, 6), |(_, _, h, w)| {
+        (h * 6 + w + 1) as f32 / 36.0
+    }).into_dyn();
+
+    let weight_data = Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| {
+        (h * 3 + w + 1) as f32 / 10.0
+    }).into_dyn();
+
+    let inputs: HashMap<String, ArrayD<f32>> = [
+        ("input".to_string(), input_data),
+        ("weight".to_string(), weight_data),
+    ].into_iter().collect();
+
+    GradTest {
+        builder: Box::new(|t| {
+            let ctx = t.values().next().unwrap().context.clone();
+            let input = &t["input"];
+            let weight = &t["weight"];
+            let output = create_conv2d(&ctx, input, weight, (2, 2), (0, 0));
+            output.sum()
+        }),
+        inputs,
+        wrt: "weight".into(),
+    }
+    .run();
+}
+
+#[test]
+fn grad_conv2d_multi_channel() {
+    // Test multi-channel convolution: input [1, 2, 4, 4], weight [3, 2, 3, 3]
+    let input_data = Array4::<f32>::from_shape_fn((1, 2, 4, 4), |(_, c, h, w)| {
+        (c * 16 + h * 4 + w + 1) as f32 / 32.0
+    }).into_dyn();
+
+    let weight_data = Array4::<f32>::from_shape_fn((3, 2, 3, 3), |(oc, ic, h, w)| {
+        (oc * 18 + ic * 9 + h * 3 + w + 1) as f32 / 100.0
+    }).into_dyn();
+
+    let inputs: HashMap<String, ArrayD<f32>> = [
+        ("input".to_string(), input_data),
+        ("weight".to_string(), weight_data),
+    ].into_iter().collect();
+
+    GradTest {
+        builder: Box::new(|t| {
+            let ctx = t.values().next().unwrap().context.clone();
+            let input = &t["input"];
+            let weight = &t["weight"];
+            let output = create_conv2d(&ctx, input, weight, (1, 1), (0, 0));
+            output.sum()
+        }),
+        inputs,
+        wrt: "weight".into(),
     }
     .run();
 }

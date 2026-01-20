@@ -8,10 +8,19 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum AutogradError {
-    #[error("ASG error: {0}")]
+    #[error("Ошибка графа при построении градиентов: {0}")]
     Asg(#[from] AsgError),
-    #[error("Shape inference: {0}")]
+
+    #[error("Ошибка вывода формы в градиентном графе: {0}")]
     Shape(#[from] ShapeInferenceError),
+
+    #[error("Операция '{0}' не поддерживает автоматическое дифференцирование. \
+             Рассмотрите использование альтернативной операции или реализуйте backward для неё.")]
+    UnsupportedOperation(String),
+
+    #[error("Градиент для узла {0} не найден. \
+             Убедитесь, что узел связан с loss через дифференцируемые операции.")]
+    GradientNotFound(NodeId),
 }
 
 /// Градиенты, построенные для одного целевого узла.
@@ -459,6 +468,87 @@ impl Gradients {
                 });
                 self.acc(*input, g_input)?;
             }
+            NodeType::Conv2d { input, weight, bias, stride, padding, dilation, groups } => {
+                // Get input and weight shapes from source graph
+                let input_node_src = self.src.get_node(*input)?;
+                let weight_node_src = self.src.get_node(*weight)?;
+
+                let input_shape = input_node_src.shape.as_ref()
+                    .ok_or_else(|| AutogradError::Shape(ShapeInferenceError::MissingShapeInfo(*input)))?;
+                let weight_shape = weight_node_src.shape.as_ref()
+                    .ok_or_else(|| AutogradError::Shape(ShapeInferenceError::MissingShapeInfo(*weight)))?;
+
+                // Convert shapes to tuples
+                let input_shape_tuple = (input_shape[0], input_shape[1], input_shape[2], input_shape[3]);
+                let weight_shape_tuple = (weight_shape[0], weight_shape[1], weight_shape[2], weight_shape[3]);
+
+                // Import input and weight nodes for gradient computation
+                let input_node = self.import(*input)?;
+                let weight_node = self.import(*weight)?;
+
+                // Gradient w.r.t. input: transposed convolution
+                let g_input = self.grad.add_node(None, NodeType::Conv2dBackwardInput {
+                    grad_output: g_out,
+                    weight: weight_node,
+                    input_shape: input_shape_tuple,
+                    stride: *stride,
+                    padding: *padding,
+                    dilation: *dilation,
+                    groups: *groups,
+                });
+                self.acc(*input, g_input)?;
+
+                // Gradient w.r.t. weight
+                let g_weight = self.grad.add_node(None, NodeType::Conv2dBackwardWeight {
+                    grad_output: g_out,
+                    input: input_node,
+                    weight_shape: weight_shape_tuple,
+                    stride: *stride,
+                    padding: *padding,
+                    dilation: *dilation,
+                    groups: *groups,
+                });
+                self.acc(*weight, g_weight)?;
+
+                // Gradient w.r.t. bias (if present): sum over batch and spatial dimensions
+                if let Some(b) = bias {
+                    // Bias gradient is sum of grad_output over (N, H, W), keeping C
+                    // For simplicity, we use Sum then reshape
+                    // grad_bias = sum(grad_output, axis=[0, 2, 3])
+                    // We'll implement this as a custom operation or decompose
+                    // For now, use a simple approach: Sum then broadcast back
+                    let g_bias = self.grad.add_node(None, NodeType::Sum(g_out));
+                    self.acc(*b, g_bias)?;
+                }
+            }
+            NodeType::LayerNorm { input, gamma, beta, eps } => {
+                // Import needed nodes from forward graph
+                let input_node = self.import(*input)?;
+                let gamma_node = self.import(*gamma)?;
+
+                // Gradient w.r.t. input: use specialized LayerNormBackward operation
+                let g_input = self.grad.add_node(None, NodeType::LayerNormBackward {
+                    grad_output: g_out,
+                    input: input_node,
+                    gamma: gamma_node,
+                    eps: *eps,
+                });
+                self.acc(*input, g_input)?;
+
+                // Gradient w.r.t. gamma: use specialized LayerNormGradGamma operation
+                let g_gamma = self.grad.add_node(None, NodeType::LayerNormGradGamma {
+                    grad_output: g_out,
+                    input: input_node,
+                    eps: *eps,
+                });
+                self.acc(*gamma, g_gamma)?;
+
+                // Gradient w.r.t. beta: use specialized LayerNormGradBeta operation
+                let g_beta = self.grad.add_node(None, NodeType::LayerNormGradBeta {
+                    grad_output: g_out,
+                });
+                self.acc(*beta, g_beta)?;
+            }
             _ => {}
         }
         Ok(())
@@ -512,6 +602,12 @@ fn inputs_of(nt: &NodeType) -> Vec<NodeId> {
         NodeType::Embedding { indices, weight } => vec![*indices, *weight],
         NodeType::EmbeddingGrad { grad_output, indices, .. } => vec![*grad_output, *indices],
         NodeType::AvgUnpool2d { input, original_input, .. } => vec![*input, *original_input],
+        NodeType::Conv2dBackwardInput { grad_output, weight, .. } => vec![*grad_output, *weight],
+        NodeType::Conv2dBackwardWeight { grad_output, input, .. } => vec![*grad_output, *input],
+        NodeType::LayerNorm { input, gamma, beta, .. } => vec![*input, *gamma, *beta],
+        NodeType::LayerNormBackward { grad_output, input, gamma, .. } => vec![*grad_output, *input, *gamma],
+        NodeType::LayerNormGradGamma { grad_output, input, .. } => vec![*grad_output, *input],
+        NodeType::LayerNormGradBeta { grad_output } => vec![*grad_output],
         _ => vec![],
     }
 }

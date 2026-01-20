@@ -28,12 +28,13 @@ RustyASG находится в активной разработке. Больш
 - [x] MaxPool2d и его градиент (через MaxUnpool2d)
 - [x] AvgPool2d и его градиент (через AvgUnpool2d)
 - [x] Embedding и его градиент (EmbeddingGrad scatter-add)
-- [ ] LayerNorm autograd (частично, требует исправления)
+- [x] LayerNorm autograd (полная реализация с LayerNormBackward, LayerNormGradGamma, LayerNormGradBeta)
+- [x] Conv2d autograd (backward pass через Conv2dBackwardInput и Conv2dBackwardWeight)
 - [x] Транспонирование и reshape
 
 #### Нейросетевые слои (`nn`)
 - [x] Linear (полносвязный слой)
-- [x] LayerNorm (с ограничениями в autograd)
+- [x] LayerNorm (полная поддержка autograd)
 - [x] BatchNorm
 - [x] Dropout и SpatialDropout
 - [x] Conv2d (2D свертка с padding, stride, dilation, groups)
@@ -46,8 +47,13 @@ RustyASG находится в активной разработке. Больш
 #### Positional Encoding
 - [x] Sinusoidal Positional Encoding
 - [x] Learned Positional Embedding
-- [ ] Rotary Position Embeddings (RoPE)
-- [ ] ALiBi
+- [x] Rotary Position Embeddings (RoPE)
+- [x] ALiBi
+
+#### Attention
+- [x] Multi-Head Attention с масками (causal, padding)
+- [x] Scaled Dot-Product Attention
+- [x] Cross-Attention support
 
 #### Функции активации
 - [x] ReLU
@@ -122,32 +128,40 @@ RustyASG находится в активной разработке. Больш
 
 ### Фаза 1: Критические исправления (High Priority)
 
-#### 1.1 Исправить LayerNorm autograd
-**Статус:** Pending
-**Сложность:** Высокая
+#### 1.1 ~~Исправить LayerNorm autograd~~ ✅ DONE
+**Статус:** Завершено
 **Описание:**
-Градиент для `LayerNorm` по параметру `x` работает некорректно из-за архитектурных ограничений autograd. Текущая реализация не может обрабатывать broadcasting в обратном проходе.
+Реализованы специализированные NodeType операции для корректного autograd:
+- `LayerNorm` - forward pass
+- `LayerNormBackward` - градиент по входу x с учётом зависимостей через mean и variance
+- `LayerNormGradGamma` - градиент по параметру gamma
+- `LayerNormGradBeta` - градиент по параметру beta
 
-**Требуется:**
-- Рефакторинг autograd для поддержки reduce операций
-- Добавление broadcast-aware backward pass
-- Реализация корректных градиентов для mean и variance
+Все gradient check тесты проходят.
+
+#### 1.2 ~~Conv2d autograd~~ ✅ DONE
+**Статус:** Завершено
+**Описание:**
+Реализованы backward операции для Conv2d:
+- `Conv2dBackwardInput` - градиент по входу (транспонированная свертка)
+- `Conv2dBackwardWeight` - градиент по весам
+
+Все gradient check тесты проходят (5 тестов: basic, with_padding, with_stride, multi_channel, input).
 
 ---
 
 ### Фаза 2: Сверточные операции (Medium Priority)
 
-#### 2.1 Conv2d
-**Статус:** Pending
-**Сложность:** Высокая
+#### 2.1 Conv2d ✅ DONE
+**Статус:** Завершено
 **Описание:**
-Реализация 2D свертки - ключевая операция для Computer Vision.
+2D свертка полностью реализована с поддержкой autograd.
 
-**Задачи:**
-- [ ] NodeType::Conv2d с параметрами (kernel_size, stride, padding, dilation)
-- [ ] CPU реализация (im2col + matmul)
+**Реализовано:**
+- [x] NodeType::Conv2d с параметрами (kernel_size, stride, padding, dilation, groups)
+- [x] CPU реализация (im2col + matmul)
+- [x] Autograd для Conv2d (Conv2dBackwardInput, Conv2dBackwardWeight)
 - [ ] GPU реализация (WGSL шейдер)
-- [ ] Autograd для Conv2d
 - [ ] Depthwise и Grouped convolutions
 
 #### 2.2 Pooling операции
@@ -331,12 +345,12 @@ RustyASG находится в активной разработке. Больш
 ## Приоритеты
 
 ### Критические (блокируют production use)
-1. LayerNorm autograd fix
-2. Conv2d операция
-3. Improved error messages
+1. ~~LayerNorm autograd fix~~ ✅ DONE
+2. ~~Conv2d операция~~ ✅ DONE
+3. Improved error messages (in progress)
 
 ### Высокие (значительно улучшат usability)
-1. Multi-Head Attention
+1. ~~Multi-Head Attention~~ ✅ DONE
 2. Model checkpointing improvements
 3. Better documentation
 

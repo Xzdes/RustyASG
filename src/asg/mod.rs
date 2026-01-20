@@ -38,10 +38,20 @@ pub type AsgResult<T> = std::result::Result<T, AsgError>;
 /// Ошибки, которые могут возникнуть при работе с ASG.
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum AsgError {
-    #[error("Узел с ID {0} не найден в графе")]
+    #[error("Узел с ID {0} не найден в графе. \
+             Проверьте, что узел был добавлен в граф с помощью add_node() перед его использованием.")]
     NodeNotFound(NodeId),
-    #[error("Вход с именем '{0}' не найден в графе")]
+
+    #[error("Вход с именем '{0}' не найден в графе. \
+             Убедитесь, что Input узел был создан с таким именем.")]
     InputNotFound(String),
+
+    #[error("Некорректная структура графа: {0}")]
+    InvalidGraph(String),
+
+    #[error("Циклическая зависимость обнаружена в графе. \
+             ASG должен быть ациклическим направленным графом (DAG).")]
+    CyclicDependency,
 }
 
 /// Перечисление базовых типов данных, поддерживаемых на уровне графа.
@@ -254,6 +264,80 @@ pub enum NodeType {
         input: NodeId,
         /// Целевой выходной размер (H_out, W_out).
         output_size: (usize, usize),
+    },
+
+    /// Layer Normalization - нормализация по последним normalized_shape измерениям.
+    /// y = gamma * (x - mean) / sqrt(var + eps) + beta
+    LayerNorm {
+        /// Входной тензор.
+        input: NodeId,
+        /// Обучаемый параметр масштабирования.
+        gamma: NodeId,
+        /// Обучаемый параметр сдвига.
+        beta: NodeId,
+        /// Малая константа для численной стабильности.
+        eps: f32,
+    },
+
+    /// Backward pass для LayerNorm по входу x.
+    /// Вычисляет корректный градиент с учетом всех зависимостей через mean и variance.
+    LayerNormBackward {
+        /// Градиент от следующего слоя ∂L/∂y.
+        grad_output: NodeId,
+        /// Исходный вход x.
+        input: NodeId,
+        /// Параметр gamma.
+        gamma: NodeId,
+        /// Epsilon для численной стабильности.
+        eps: f32,
+    },
+
+    /// Градиент LayerNorm по параметру gamma.
+    /// grad_gamma = sum(grad_output * x_normalized, axis=batch)
+    LayerNormGradGamma {
+        /// Градиент от следующего слоя ∂L/∂y.
+        grad_output: NodeId,
+        /// Исходный вход x.
+        input: NodeId,
+        /// Epsilon для численной стабильности.
+        eps: f32,
+    },
+
+    /// Градиент LayerNorm по параметру beta.
+    /// grad_beta = sum(grad_output, axis=batch)
+    LayerNormGradBeta {
+        /// Градиент от следующего слоя ∂L/∂y.
+        grad_output: NodeId,
+    },
+
+    /// Градиент Conv2d по входу (input).
+    /// Реализуется как транспонированная свертка.
+    Conv2dBackwardInput {
+        /// Градиент от следующего слоя (d_output) формы [N, C_out, H_out, W_out].
+        grad_output: NodeId,
+        /// Веса свертки формы [C_out, C_in/groups, kH, kW].
+        weight: NodeId,
+        /// Форма исходного входа [N, C_in, H_in, W_in].
+        input_shape: (usize, usize, usize, usize),
+        stride: (usize, usize),
+        padding: (usize, usize),
+        dilation: (usize, usize),
+        groups: usize,
+    },
+
+    /// Градиент Conv2d по весам (weight).
+    /// Реализуется как свертка входа с градиентом выхода.
+    Conv2dBackwardWeight {
+        /// Градиент от следующего слоя формы [N, C_out, H_out, W_out].
+        grad_output: NodeId,
+        /// Исходный вход формы [N, C_in, H_in, W_in].
+        input: NodeId,
+        /// Форма весов [C_out, C_in/groups, kH, kW].
+        weight_shape: (usize, usize, usize, usize),
+        stride: (usize, usize),
+        padding: (usize, usize),
+        dilation: (usize, usize),
+        groups: usize,
     },
 
     // --- Управляющие конструкции ---

@@ -31,14 +31,20 @@ pub use conv::{Conv2d, Conv2dConfig, ConvTranspose2d};
 pub use pooling::{AdaptiveAvgPool2d, AvgPool2d, GlobalAvgPool2d, MaxPool2d};
 
 // Другие слои
-pub use attention::MultiHeadAttention;
+pub use attention::{
+    MultiHeadAttention, MultiHeadAttentionConfig, AttentionMask,
+    create_causal_mask, create_padding_mask_from_ids,
+};
 pub use batchnorm::BatchNorm;
 pub use dropout::{Dropout, SpatialDropout};
 pub use embedding::Embedding;
 pub use feedforward::FeedForward;
 pub use linear::Linear;
 pub use norm::LayerNorm;
-pub use positional::{LearnedPositionalEmbedding, SinusoidalPositionalEncoding, create_position_ids};
+pub use positional::{
+    LearnedPositionalEmbedding, SinusoidalPositionalEncoding, create_position_ids,
+    RotaryPositionEmbedding, ALiBi,
+};
 pub use transformer::TransformerBlock;
 
 // Базовый трейт

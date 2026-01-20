@@ -11,26 +11,44 @@ use thiserror::Error;
 pub enum ShapeInferenceError {
     #[error("Ошибка графа: {0}")]
     AsgError(#[from] AsgError),
-    #[error("Несовместимые формы для операции '{op}': {shape1:?} и {shape2:?}")]
+
+    #[error("Несовместимые формы для операции '{op}': левый операнд {shape1:?}, правый операнд {shape2:?}. \
+             Убедитесь, что размерности совместимы для broadcasting или матричного умножения.")]
     IncompatibleShapes {
         op: String,
         shape1: Shape,
         shape2: Shape,
     },
-    #[error("Информация о форме отсутствует для узла {0}, необходимого для вывода")]
+
+    #[error("Информация о форме отсутствует для узла {0}. \
+             Это может означать, что узел ещё не был обработан shape inference или граф содержит циклическую зависимость.")]
     MissingShapeInfo(NodeId),
-    #[error("Для входа или параметра с именем '{0}' не предоставлена информация о форме")]
+
+    #[error("Не указана начальная форма для '{0}'. \
+             Добавьте форму в initial_shapes HashMap при вызове ShapeInference::run().")]
     MissingInitialShape(String),
-    #[error("Неверное количество измерений (ожидалось {expected}, получено {actual}) для узла {node_id}")]
+
+    #[error("Неверный ранг тензора для узла {node_id}: ожидалось {expected}D, получено {actual}D. \
+             Проверьте размерность входных данных.")]
     InvalidRank {
         node_id: NodeId,
         expected: usize,
         actual: usize,
     },
-    #[error("Узел {0} должен быть константой (Literal) для вывода формы")]
+
+    #[error("Узел {0} должен быть Literal для вычисления формы (например, для операции Reshape). \
+             Динамические формы не поддерживаются.")]
     NotALiteral(NodeId),
-    #[error("Вывод формы для типа узла {0:?} еще не реализован")]
+
+    #[error("Shape inference не реализован для операции: {0}. \
+             Добавьте обработку этого типа узла в ShapeInference::infer_node_shape().")]
     UnimplementedNodeType(String),
+
+    #[error("Ошибка broadcasting: невозможно привести формы {0:?} и {1:?} к общей форме.")]
+    BroadcastError(Shape, Shape),
+
+    #[error("Ошибка матричного умножения: несовместимые внутренние размерности {0} и {1}.")]
+    MatmulDimensionError(usize, usize),
 }
 
 type Result<T> = std::result::Result<T, ShapeInferenceError>;
@@ -382,6 +400,44 @@ NodeType::MaxPool2d { input, kernel_size, stride } => {
                 Ok((orig_shape, dtype))
             }
 
+            // Conv2dBackwardInput: output has same shape as original input
+            NodeType::Conv2dBackwardInput { input_shape, grad_output, .. } => {
+                let (_, dtype) = Self::get_shape_dtype(asg, *grad_output)?;
+                let (n, c, h, w) = *input_shape;
+                Ok((vec![n, c, h, w], dtype))
+            }
+
+            // Conv2dBackwardWeight: output has same shape as weight
+            NodeType::Conv2dBackwardWeight { weight_shape, grad_output, .. } => {
+                let (_, dtype) = Self::get_shape_dtype(asg, *grad_output)?;
+                let (c_out, c_in, kh, kw) = *weight_shape;
+                Ok((vec![c_out, c_in, kh, kw], dtype))
+            }
+
+            // LayerNorm: output has same shape as input
+            NodeType::LayerNorm { input, .. } => {
+                Self::get_shape_dtype(asg, *input)
+            }
+
+            // LayerNormBackward: output (gradient w.r.t. input) has same shape as input
+            NodeType::LayerNormBackward { input, .. } => {
+                Self::get_shape_dtype(asg, *input)
+            }
+
+            // LayerNormGradGamma: output has shape [1, norm_size] where norm_size is last dim of input
+            NodeType::LayerNormGradGamma { input, .. } => {
+                let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
+                let norm_size = *input_shape.last().unwrap_or(&1);
+                Ok((vec![1, norm_size], dtype))
+            }
+
+            // LayerNormGradBeta: output has shape [1, norm_size] where norm_size is last dim of grad_output
+            NodeType::LayerNormGradBeta { grad_output } => {
+                let (grad_shape, dtype) = Self::get_shape_dtype(asg, *grad_output)?;
+                let norm_size = *grad_shape.last().unwrap_or(&1);
+                Ok((vec![1, norm_size], dtype))
+            }
+
             // --- Явно обрабатываем остальные узлы, чтобы избежать заглушки ---
             unimplemented_type => Err(ShapeInferenceError::UnimplementedNodeType(format!("{:?}", unimplemented_type))),
         }
@@ -474,6 +530,12 @@ NodeType::MaxPool2d { input, kernel_size, stride } => {
             NodeType::Embedding { indices, weight } => vec![*indices, *weight],
             NodeType::EmbeddingGrad { grad_output, indices, .. } => vec![*grad_output, *indices],
             NodeType::AvgUnpool2d { input, original_input, .. } => vec![*input, *original_input],
+            NodeType::Conv2dBackwardInput { grad_output, weight, .. } => vec![*grad_output, *weight],
+            NodeType::Conv2dBackwardWeight { grad_output, input, .. } => vec![*grad_output, *input],
+            NodeType::LayerNorm { input, gamma, beta, .. } => vec![*input, *gamma, *beta],
+            NodeType::LayerNormBackward { grad_output, input, gamma, .. } => vec![*grad_output, *input, *gamma],
+            NodeType::LayerNormGradGamma { grad_output, input, .. } => vec![*grad_output, *input],
+            NodeType::LayerNormGradBeta { grad_output } => vec![*grad_output],
             _ => vec![],
         };
 
