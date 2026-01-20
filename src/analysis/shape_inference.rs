@@ -1,7 +1,7 @@
-//! Модуль для вывода форм и типов данных (Shape Inference).
+//! Module for shape and data type inference (Shape Inference).
 //!
-//! Проходит по графу вычислений и для каждого узла определяет форму
-//! и тип выходного тензора на основе форм его входов и типа операции.
+//! Traverses the computation graph and determines the shape
+//! and data type of the output tensor for each node based on its input shapes and operation type.
 
 use crate::asg::{Asg, AsgError, DType, Node, NodeId, NodeType, Shape, Value};
 use std::collections::{HashMap, HashSet};
@@ -9,62 +9,62 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum ShapeInferenceError {
-    #[error("Ошибка графа: {0}")]
+    #[error("Graph error: {0}")]
     AsgError(#[from] AsgError),
 
-    #[error("Несовместимые формы для операции '{op}': левый операнд {shape1:?}, правый операнд {shape2:?}. \
-             Убедитесь, что размерности совместимы для broadcasting или матричного умножения.")]
+    #[error("Incompatible shapes for operation '{op}': left operand {shape1:?}, right operand {shape2:?}. \
+             Ensure dimensions are compatible for broadcasting or matrix multiplication.")]
     IncompatibleShapes {
         op: String,
         shape1: Shape,
         shape2: Shape,
     },
 
-    #[error("Информация о форме отсутствует для узла {0}. \
-             Это может означать, что узел ещё не был обработан shape inference или граф содержит циклическую зависимость.")]
+    #[error("Shape information missing for node {0}. \
+             This may mean the node has not been processed by shape inference yet or the graph contains a cyclic dependency.")]
     MissingShapeInfo(NodeId),
 
-    #[error("Не указана начальная форма для '{0}'. \
-             Добавьте форму в initial_shapes HashMap при вызове ShapeInference::run().")]
+    #[error("Initial shape not specified for '{0}'. \
+             Add the shape to the initial_shapes HashMap when calling ShapeInference::run().")]
     MissingInitialShape(String),
 
-    #[error("Неверный ранг тензора для узла {node_id}: ожидалось {expected}D, получено {actual}D. \
-             Проверьте размерность входных данных.")]
+    #[error("Invalid tensor rank for node {node_id}: expected {expected}D, got {actual}D. \
+             Check input data dimensions.")]
     InvalidRank {
         node_id: NodeId,
         expected: usize,
         actual: usize,
     },
 
-    #[error("Узел {0} должен быть Literal для вычисления формы (например, для операции Reshape). \
-             Динамические формы не поддерживаются.")]
+    #[error("Node {0} must be a Literal for shape computation (e.g., for Reshape operation). \
+             Dynamic shapes are not supported.")]
     NotALiteral(NodeId),
 
-    #[error("Shape inference не реализован для операции: {0}. \
-             Добавьте обработку этого типа узла в ShapeInference::infer_node_shape().")]
+    #[error("Shape inference not implemented for operation: {0}. \
+             Add handling for this node type in ShapeInference::infer_node_shape().")]
     UnimplementedNodeType(String),
 
-    #[error("Ошибка broadcasting: невозможно привести формы {0:?} и {1:?} к общей форме.")]
+    #[error("Broadcast error: cannot broadcast shapes {0:?} and {1:?} to a common shape.")]
     BroadcastError(Shape, Shape),
 
-    #[error("Ошибка матричного умножения: несовместимые внутренние размерности {0} и {1}.")]
+    #[error("Matrix multiplication error: incompatible inner dimensions {0} and {1}.")]
     MatmulDimensionError(usize, usize),
 }
 
 type Result<T> = std::result::Result<T, ShapeInferenceError>;
 
-/// Структура, выполняющая вывод форм для ASG.
+/// Structure that performs shape inference for ASG.
 pub struct ShapeInference;
 
 impl ShapeInference {
-    /// Запускает процесс вывода форм для графа.
+    /// Runs the shape inference process for the graph.
     ///
-    /// Модифицирует граф "на месте", заполняя поля `shape` и `dtype` для каждого узла.
+    /// Modifies the graph in-place, filling in the `shape` and `dtype` fields for each node.
     ///
-    /// # Аргументы
-    /// * `asg` - Изменяемая ссылка на граф, который нужно проанализировать.
-    /// * `initial_shapes` - HashMap, предоставляющий формы и типы для всех
-    ///   входных (`Input`) и параметрических (`Parameter`) узлов. Ключ - имя узла.
+    /// # Arguments
+    /// * `asg` - Mutable reference to the graph to analyze.
+    /// * `initial_shapes` - HashMap providing shapes and types for all
+    ///   `Input` and `Parameter` nodes. Key is the node name.
     pub fn run(asg: &mut Asg, initial_shapes: &HashMap<String, (Shape, DType)>) -> Result<()> {
         let sorted_nodes = Self::topological_sort(asg)?;
 
@@ -81,7 +81,7 @@ impl ShapeInference {
         Ok(())
     }
 
-    /// Основная логика вывода формы для одного узла.
+    /// Main shape inference logic for a single node.
     fn infer_node_shape(
         asg: &Asg,
         node: &Node,
@@ -99,7 +99,7 @@ impl ShapeInference {
                 Value::Tensor(arr) => Ok((arr.shape().to_vec(), DType::F32)),
                 Value::Integer(_) => Ok((vec![], DType::I64)),
                 Value::Boolean(_) => Ok((vec![], DType::Bool)),
-                _ => Ok((vec![], DType::F32)), 
+                _ => Ok((vec![], DType::F32)),
             },
 
             NodeType::Add(l, r)
@@ -108,7 +108,7 @@ impl ShapeInference {
             | NodeType::Divide(l, r) => {
                 let (ls, ld) = Self::get_shape_dtype(asg, *l)?;
                 let (rs, _rd) = Self::get_shape_dtype(asg, *r)?;
-                
+
                 let out_shape = if ls.iter().product::<usize>() >= rs.iter().product::<usize>() {
                     ls
                 } else {
@@ -123,7 +123,6 @@ impl ShapeInference {
                 let (rs, _) = Self::get_shape_dtype(asg, *r)?;
 
                 if ls.len() < 2 || rs.len() < 2 {
-                    // Для 4D тензоров в attention этот код корректен, так как проверяется общая длина.
                     return Err(ShapeInferenceError::InvalidRank {
                         node_id: node.id,
                         expected: 2,
@@ -151,33 +150,39 @@ impl ShapeInference {
                 Ok((out_shape, ld))
             }
 
-            // Поэлементные операции - форма не меняется
+            // Element-wise operations - shape unchanged
             NodeType::ReLU(id) | NodeType::Sigmoid(id) | NodeType::Sqrt(id) | NodeType::Log(id) |
             NodeType::Exp(id) | NodeType::Abs(id) | NodeType::Neg(id) | NodeType::Tanh(id) |
             NodeType::GELU(id) | NodeType::SiLU(id) => {
                 Self::get_shape_dtype(asg, *id)
             }
 
-            // Поэлементные с параметрами - форма не меняется
+            // Element-wise with parameters - shape unchanged
             NodeType::LeakyReLU(id, _) | NodeType::ELU(id, _) | NodeType::Softplus(id, _) |
             NodeType::Clamp(id, _, _) => {
                 Self::get_shape_dtype(asg, *id)
             }
 
             NodeType::Sum(_) => Ok((vec![], DType::F32)),
-NodeType::Mean(id) | NodeType::Variance(id) => {
-    let (mut shape, dtype) = Self::get_shape_dtype(asg, *id)?;
-    // Не удаляем размерность, а устанавливаем ее в 1, чтобы сохранить ранг тензора
-    // для корректного broadcasting'а.
-    if !shape.is_empty() {
-        *shape.last_mut().unwrap() = 1;
-    }
-    Ok((shape, dtype))
-}
+
+            NodeType::Mean(id) | NodeType::Variance(id) => {
+                let (mut shape, dtype) = Self::get_shape_dtype(asg, *id)?;
+                // Don't remove dimension, set it to 1 to preserve tensor rank
+                // for correct broadcasting.
+                if !shape.is_empty() {
+                    *shape.last_mut().unwrap() = 1;
+                }
+                Ok((shape, dtype))
+            }
+
             NodeType::Transpose(id, axis1, axis2) => {
                 let (mut shape, dtype) = Self::get_shape_dtype(asg, *id)?;
                 if *axis1 >= shape.len() || *axis2 >= shape.len() {
-                    return Err(ShapeInferenceError::InvalidRank { node_id: node.id, expected: axis1.max(axis2) + 1, actual: shape.len() });
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: axis1.max(axis2) + 1,
+                        actual: shape.len(),
+                    });
                 }
                 shape.swap(*axis1, *axis2);
                 Ok((shape, dtype))
@@ -201,12 +206,12 @@ NodeType::Mean(id) | NodeType::Variance(id) => {
             }
 
             NodeType::Softmax(id) => Self::get_shape_dtype(asg, *id),
-            
+
             NodeType::GreaterThan(l, r) => {
                 let (ls, _) = Self::get_shape_dtype(asg, *l)?;
                 let (rs, _) = Self::get_shape_dtype(asg, *r)?;
                 let out_shape = if ls.iter().product::<usize>() >= rs.iter().product::<usize>() { ls } else { rs };
-                Ok((out_shape, DType::F32)) // Возвращает 0.0 или 1.0, так что F32
+                Ok((out_shape, DType::F32)) // Returns 0.0 or 1.0, so F32
             }
 
             NodeType::ReduceSumTo(source_id, target_shape_provider_id) => {
@@ -215,45 +220,40 @@ NodeType::Mean(id) | NodeType::Variance(id) => {
                 Ok((target_shape, dtype))
             }
 
-NodeType::MaxPool2d { input, kernel_size, stride } => {
-    let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
+            NodeType::MaxPool2d { input, kernel_size, stride } => {
+                let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
 
-    if input_shape.len() != 4 {
-        return Err(ShapeInferenceError::InvalidRank {
-            node_id: node.id,
-            expected: 4, // Ожидаем [N, C, H, W]
-            actual: input_shape.len(),
-        });
-    }
+                if input_shape.len() != 4 {
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: 4, // Expected [N, C, H, W]
+                        actual: input_shape.len(),
+                    });
+                }
 
-    let n = input_shape[0];
-    let c = input_shape[1];
-    let h = input_shape[2];
-    let w = input_shape[3];
+                let n = input_shape[0];
+                let c = input_shape[1];
+                let h = input_shape[2];
+                let w = input_shape[3];
 
-    if h < kernel_size.0 || w < kernel_size.1 {
-        // Пока нет отдельной ошибки → кидаем MissingShapeInfo
-        return Err(ShapeInferenceError::MissingShapeInfo(node.id));
-    }
+                if h < kernel_size.0 || w < kernel_size.1 {
+                    return Err(ShapeInferenceError::MissingShapeInfo(node.id));
+                }
 
-    let out_h = (h - kernel_size.0) / stride.0 + 1;
-    let out_w = (w - kernel_size.1) / stride.1 + 1;
+                let out_h = (h - kernel_size.0) / stride.0 + 1;
+                let out_w = (w - kernel_size.1) / stride.1 + 1;
 
-    let output_shape = vec![n, c, out_h, out_w];
-    Ok((output_shape, dtype))
-}
-
-
-
+                let output_shape = vec![n, c, out_h, out_w];
+                Ok((output_shape, dtype))
+            }
 
             NodeType::MaxUnpool2d { original_input, .. } => {
-                // Форма выхода unpooling'а всегда совпадает с формой ИСХОДНОГО входа
-                // для соответствующего pooling'а.
+                // Unpooling output shape always matches the ORIGINAL pooling input shape.
                 Self::get_shape_dtype(asg, *original_input)
             }
 
             NodeType::Power(base_id, _power_id) => {
-                // Форма определяется базой
+                // Shape is determined by base
                 Self::get_shape_dtype(asg, *base_id)
             }
 
@@ -438,12 +438,12 @@ NodeType::MaxPool2d { input, kernel_size, stride } => {
                 Ok((vec![1, norm_size], dtype))
             }
 
-            // --- Явно обрабатываем остальные узлы, чтобы избежать заглушки ---
+            // --- Explicitly handle remaining nodes to avoid fallback ---
             unimplemented_type => Err(ShapeInferenceError::UnimplementedNodeType(format!("{:?}", unimplemented_type))),
         }
     }
 
-    /// Вспомогательная функция для получения уже вычисленной формы и типа узла.
+    /// Helper function to get already computed shape and type for a node.
     fn get_shape_dtype(asg: &Asg, node_id: NodeId) -> Result<(Shape, DType)> {
         let node = asg.get_node(node_id)?;
         match (&node.shape, &node.dtype) {
@@ -452,12 +452,12 @@ NodeType::MaxPool2d { input, kernel_size, stride } => {
         }
     }
 
-    /// Выполняет топологическую сортировку графа.
-    /// Возвращает вектор ID узлов в порядке, пригодном для вычислений.
+    /// Performs topological sort of the graph.
+    /// Returns a vector of node IDs in order suitable for computation.
     pub fn topological_sort(asg: &Asg) -> Result<Vec<NodeId>> {
         let mut sorted = Vec::new();
         let mut visited = HashSet::new();
-        // ВАЖНО: нужно обойти все выходы, а не только один
+        // IMPORTANT: need to traverse all outputs, not just one
         for output_id in &asg.outputs {
             Self::build_sorted_graph(*output_id, asg, &mut visited, &mut sorted)?;
         }
@@ -473,7 +473,7 @@ NodeType::MaxPool2d { input, kernel_size, stride } => {
         if visited.contains(&node_id) {
             return Ok(());
         }
-        
+
         let node = asg.get_node(node_id)?;
 
         let inputs = match &node.node_type {
@@ -485,7 +485,7 @@ NodeType::MaxPool2d { input, kernel_size, stride } => {
             | NodeType::GreaterThan(a, b)
             | NodeType::Power(a, b)
             | NodeType::Broadcast(a, b)
-            | NodeType::Reshape(a, b) 
+            | NodeType::Reshape(a, b)
             | NodeType::ReduceSumTo(a, b) => vec![*a, *b],
 
             NodeType::ReLU(a)
@@ -542,7 +542,7 @@ NodeType::MaxPool2d { input, kernel_size, stride } => {
         for input_id in inputs {
             Self::build_sorted_graph(input_id, asg, visited, sorted)?;
         }
-        
+
         if !visited.contains(&node_id) {
             visited.insert(node_id);
             sorted.push(node_id);

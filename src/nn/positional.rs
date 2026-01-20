@@ -1,14 +1,14 @@
-//! Модуль с реализациями позиционного кодирования.
+//! Module with positional encoding implementations.
 //!
-//! Позиционное кодирование добавляет информацию о позиции токенов в последовательности,
-//! что критически важно для Transformer-архитектур, которые сами по себе не учитывают порядок.
+//! Positional encoding adds information about token positions in a sequence,
+//! which is critically important for Transformer architectures that don't inherently account for order.
 //!
-//! # Поддерживаемые типы:
+//! # Supported Types:
 //!
-//! - **SinusoidalPositionalEncoding**: Классическое позиционное кодирование из "Attention is All You Need"
-//! - **LearnedPositionalEmbedding**: Обучаемые позиционные embeddings
+//! - **SinusoidalPositionalEncoding**: Classic positional encoding from "Attention is All You Need"
+//! - **LearnedPositionalEmbedding**: Learnable positional embeddings
 //!
-//! # Пример использования
+//! # Usage Example
 //!
 //! ```ignore
 //! use rustyasg::nn::SinusoidalPositionalEncoding;
@@ -17,7 +17,7 @@
 //! let pos_enc = SinusoidalPositionalEncoding::new(&context, 512, 1000, "pos_enc");
 //!
 //! let input = Tensor::new_input(&context, "input"); // [batch, seq_len, 512]
-//! let output = pos_enc.forward(&input); // добавляет позиционное кодирование
+//! let output = pos_enc.forward(&input); // adds positional encoding
 //! ```
 
 use super::module::Module;
@@ -26,44 +26,44 @@ use ndarray::{ArrayD, IxDyn};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Синусоидальное позиционное кодирование из оригинальной статьи "Attention is All You Need".
+/// Sinusoidal positional encoding from the original "Attention is All You Need" paper.
 ///
 /// PE(pos, 2i) = sin(pos / 10000^(2i/d_model))
 /// PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
 ///
-/// Преимущества:
-/// - Не требует обучения
-/// - Может экстраполировать на последовательности длиннее, чем видел при обучении
-/// - Относительные позиции представлены линейно
+/// Advantages:
+/// - Requires no training
+/// - Can extrapolate to sequences longer than seen during training
+/// - Relative positions are represented linearly
 #[derive(Debug, Clone)]
 pub struct SinusoidalPositionalEncoding {
-    /// Размерность модели (embedding dimension).
+    /// Model dimension (embedding dimension).
     pub d_model: usize,
-    /// Максимальная длина последовательности.
+    /// Maximum sequence length.
     pub max_len: usize,
-    /// Предвычисленный тензор позиционного кодирования [max_len, d_model].
+    /// Precomputed positional encoding tensor [max_len, d_model].
     pub encoding: Tensor,
 }
 
 impl SinusoidalPositionalEncoding {
-    /// Создает новый слой синусоидального позиционного кодирования.
+    /// Creates a new sinusoidal positional encoding layer.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `context` - Контекст графа
-    /// * `d_model` - Размерность модели (должна быть четной)
-    /// * `max_len` - Максимальная длина последовательности
-    /// * `name` - Имя для тензора кодирования
+    /// * `context` - Graph context
+    /// * `d_model` - Model dimension (must be even)
+    /// * `max_len` - Maximum sequence length
+    /// * `name` - Name for encoding tensor
     pub fn new(
         context: &Rc<RefCell<GraphContext>>,
         d_model: usize,
         max_len: usize,
         name: &str,
     ) -> Self {
-        // Предвычисляем позиционное кодирование
+        // Precompute positional encoding
         let encoding_data = Self::compute_encoding(d_model, max_len);
 
-        // Создаем как литерал (не обучается)
+        // Create as literal (not trainable)
         let encoding = Tensor::new_literal(context, encoding_data, name);
 
         Self {
@@ -73,7 +73,7 @@ impl SinusoidalPositionalEncoding {
         }
     }
 
-    /// Вычисляет матрицу позиционного кодирования.
+    /// Computes positional encoding matrix.
     fn compute_encoding(d_model: usize, max_len: usize) -> ArrayD<f32> {
         let mut encoding = ArrayD::zeros(IxDyn(&[max_len, d_model]));
 
@@ -82,12 +82,12 @@ impl SinusoidalPositionalEncoding {
                 let div_term = (10000.0_f32).powf((2 * i) as f32 / d_model as f32);
                 let angle = pos as f32 / div_term;
 
-                // sin для четных индексов, cos для нечетных
+                // sin for even indices, cos for odd indices
                 encoding[[pos, 2 * i]] = angle.sin();
                 encoding[[pos, 2 * i + 1]] = angle.cos();
             }
 
-            // Если d_model нечетное, последний элемент - sin
+            // If d_model is odd, last element is sin
             if d_model % 2 == 1 {
                 let div_term = (10000.0_f32).powf((d_model - 1) as f32 / d_model as f32);
                 let angle = pos as f32 / div_term;
@@ -98,32 +98,32 @@ impl SinusoidalPositionalEncoding {
         encoding
     }
 
-    /// Возвращает позиционное кодирование для заданной длины последовательности.
+    /// Returns positional encoding for given sequence length.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `seq_len` - Длина последовательности (должна быть <= max_len)
+    /// * `seq_len` - Sequence length (must be <= max_len)
     ///
-    /// # Возвращает
+    /// # Returns
     ///
-    /// Тензор формы [seq_len, d_model]
+    /// Tensor of shape [seq_len, d_model]
     pub fn get_encoding(&self, seq_len: usize) -> &Tensor {
-        // В текущей реализации возвращаем полный тензор
-        // Slice операция будет выполнена в runtime
+        // In current implementation returns full tensor
+        // Slice operation will be performed at runtime
         &self.encoding
     }
 }
 
 impl Module for SinusoidalPositionalEncoding {
-    /// Добавляет позиционное кодирование к входу.
+    /// Adds positional encoding to input.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `input` - Тензор формы [batch, seq_len, d_model]
+    /// * `input` - Tensor of shape [batch, seq_len, d_model]
     ///
-    /// # Возвращает
+    /// # Returns
     ///
-    /// Тензор той же формы с добавленным позиционным кодированием
+    /// Tensor of same shape with added positional encoding
     fn forward(&self, input: &Tensor) -> Tensor {
         // input: [batch, seq_len, d_model]
         // encoding: [max_len, d_model]
@@ -132,42 +132,42 @@ impl Module for SinusoidalPositionalEncoding {
     }
 
     fn parameters(&self) -> Vec<Tensor> {
-        // Не имеет обучаемых параметров
+        // Has no trainable parameters
         vec![]
     }
 }
 
-/// Обучаемое позиционное кодирование (Learned Positional Embedding).
+/// Learned positional encoding (Learned Positional Embedding).
 ///
-/// Использует обычный Embedding слой для представления позиций.
-/// Каждая позиция получает свой уникальный обучаемый вектор.
+/// Uses a regular Embedding layer to represent positions.
+/// Each position gets its own unique learnable vector.
 ///
-/// Преимущества:
-/// - Может выучить оптимальное представление для конкретной задачи
-/// - Простая реализация
+/// Advantages:
+/// - Can learn optimal representation for specific task
+/// - Simple implementation
 ///
-/// Недостатки:
-/// - Не может экстраполировать на позиции больше max_len
-/// - Требует дополнительных параметров
+/// Disadvantages:
+/// - Cannot extrapolate to positions beyond max_len
+/// - Requires additional parameters
 #[derive(Debug, Clone)]
 pub struct LearnedPositionalEmbedding {
-    /// Максимальная длина последовательности.
+    /// Maximum sequence length.
     pub max_len: usize,
-    /// Размерность embedding'а.
+    /// Embedding dimension.
     pub embedding_dim: usize,
-    /// Тензор embedding'ов позиций [max_len, embedding_dim].
+    /// Position embeddings tensor [max_len, embedding_dim].
     pub weight: Tensor,
 }
 
 impl LearnedPositionalEmbedding {
-    /// Создает новый слой обучаемого позиционного кодирования.
+    /// Creates a new learned positional encoding layer.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `context` - Контекст графа
-    /// * `max_len` - Максимальная длина последовательности
-    /// * `embedding_dim` - Размерность embedding'а
-    /// * `name` - Имя параметра
+    /// * `context` - Graph context
+    /// * `max_len` - Maximum sequence length
+    /// * `embedding_dim` - Embedding dimension
+    /// * `name` - Parameter name
     pub fn new(
         context: &Rc<RefCell<GraphContext>>,
         max_len: usize,
@@ -183,11 +183,11 @@ impl LearnedPositionalEmbedding {
         }
     }
 
-    /// Создает тензор позиций для заданной длины последовательности.
+    /// Creates position tensor for given sequence length.
     ///
-    /// # Возвращает
+    /// # Returns
     ///
-    /// Тензор позиций [seq_len] со значениями 0, 1, 2, ..., seq_len-1
+    /// Position tensor [seq_len] with values 0, 1, 2, ..., seq_len-1
     pub fn create_position_ids(context: &Rc<RefCell<GraphContext>>, seq_len: usize) -> Tensor {
         let positions: Vec<f32> = (0..seq_len).map(|i| i as f32).collect();
         let data = ArrayD::from_shape_vec(IxDyn(&[seq_len]), positions).unwrap();
@@ -196,15 +196,15 @@ impl LearnedPositionalEmbedding {
 }
 
 impl Module for LearnedPositionalEmbedding {
-    /// Выполняет lookup позиционных embeddings по индексам позиций.
+    /// Performs lookup of positional embeddings by position indices.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `position_ids` - Тензор индексов позиций [seq_len] или [batch, seq_len]
+    /// * `position_ids` - Position indices tensor [seq_len] or [batch, seq_len]
     ///
-    /// # Возвращает
+    /// # Returns
     ///
-    /// Тензор позиционных embeddings [seq_len, embedding_dim] или [batch, seq_len, embedding_dim]
+    /// Positional embeddings tensor [seq_len, embedding_dim] or [batch, seq_len, embedding_dim]
     fn forward(&self, position_ids: &Tensor) -> Tensor {
         position_ids.embedding(&self.weight)
     }
@@ -214,17 +214,17 @@ impl Module for LearnedPositionalEmbedding {
     }
 }
 
-/// Вспомогательная функция для создания позиционных индексов.
+/// Helper function for creating position indices.
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `context` - Контекст графа
-/// * `batch_size` - Размер батча
-/// * `seq_len` - Длина последовательности
+/// * `context` - Graph context
+/// * `batch_size` - Batch size
+/// * `seq_len` - Sequence length
 ///
-/// # Возвращает
+/// # Returns
 ///
-/// Тензор позиций [batch_size, seq_len]
+/// Position tensor [batch_size, seq_len]
 pub fn create_position_ids(
     context: &Rc<RefCell<GraphContext>>,
     batch_size: usize,
@@ -244,27 +244,27 @@ pub fn create_position_ids(
 // RoPE - Rotary Position Embeddings
 // ============================================================
 
-/// Rotary Position Embeddings (RoPE) из статьи "RoFormer: Enhanced Transformer with Rotary Position Embedding".
+/// Rotary Position Embeddings (RoPE) from the paper "RoFormer: Enhanced Transformer with Rotary Position Embedding".
 ///
-/// RoPE кодирует позиционную информацию путем вращения пар элементов query/key векторов.
-/// Это позволяет модели учитывать относительные позиции без явной attention bias.
+/// RoPE encodes positional information by rotating pairs of elements in query/key vectors.
+/// This allows the model to account for relative positions without explicit attention bias.
 ///
-/// # Ключевые преимущества:
-/// - Линейное представление относительных позиций
-/// - Гибкость в экстраполяции на более длинные последовательности
-/// - Естественная интеграция в attention механизм
+/// # Key Advantages:
+/// - Linear representation of relative positions
+/// - Flexibility in extrapolating to longer sequences
+/// - Natural integration into attention mechanism
 ///
-/// # Формулы:
+/// # Formulas:
 /// ```text
-/// q_rot = [q_0 * cos(m*θ_0) - q_1 * sin(m*θ_0),
-///          q_0 * sin(m*θ_0) + q_1 * cos(m*θ_0),
-///          q_2 * cos(m*θ_1) - q_3 * sin(m*θ_1),
-///          q_2 * sin(m*θ_1) + q_3 * cos(m*θ_1),
+/// q_rot = [q_0 * cos(m*theta_0) - q_1 * sin(m*theta_0),
+///          q_0 * sin(m*theta_0) + q_1 * cos(m*theta_0),
+///          q_2 * cos(m*theta_1) - q_3 * sin(m*theta_1),
+///          q_2 * sin(m*theta_1) + q_3 * cos(m*theta_1),
 ///          ...]
-/// где θ_i = 10000^(-2i/d), m = позиция
+/// where theta_i = 10000^(-2i/d), m = position
 /// ```
 ///
-/// # Пример использования
+/// # Usage Example
 ///
 /// ```rust,ignore
 /// let context = Rc::new(RefCell::new(GraphContext::new()));
@@ -277,29 +277,29 @@ pub fn create_position_ids(
 /// ```
 #[derive(Debug, Clone)]
 pub struct RotaryPositionEmbedding {
-    /// Размерность головы (head_dim).
+    /// Head dimension (head_dim).
     pub head_dim: usize,
-    /// Максимальная длина последовательности.
+    /// Maximum sequence length.
     pub max_len: usize,
-    /// База для вычисления частот (обычно 10000).
+    /// Base for computing frequencies (typically 10000).
     pub base: f32,
-    /// Предвычисленные косинусы [max_len, head_dim/2].
+    /// Precomputed cosines [max_len, head_dim/2].
     cos_cached: ArrayD<f32>,
-    /// Предвычисленные синусы [max_len, head_dim/2].
+    /// Precomputed sines [max_len, head_dim/2].
     sin_cached: ArrayD<f32>,
-    /// Контекст графа.
+    /// Graph context.
     context: Rc<RefCell<GraphContext>>,
 }
 
 impl RotaryPositionEmbedding {
-    /// Создает новый RoPE слой.
+    /// Creates a new RoPE layer.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `context` - Контекст графа
-    /// * `head_dim` - Размерность головы (должна быть четной)
-    /// * `max_len` - Максимальная длина последовательности
-    /// * `name` - Имя для отладки
+    /// * `context` - Graph context
+    /// * `head_dim` - Head dimension (must be even)
+    /// * `max_len` - Maximum sequence length
+    /// * `name` - Name for debugging
     pub fn new(
         context: &Rc<RefCell<GraphContext>>,
         head_dim: usize,
@@ -309,7 +309,7 @@ impl RotaryPositionEmbedding {
         Self::with_base(context, head_dim, max_len, 10000.0, _name)
     }
 
-    /// Создает RoPE с указанной базой частот.
+    /// Creates RoPE with specified frequency base.
     pub fn with_base(
         context: &Rc<RefCell<GraphContext>>,
         head_dim: usize,
@@ -317,7 +317,7 @@ impl RotaryPositionEmbedding {
         base: f32,
         _name: &str,
     ) -> Self {
-        assert!(head_dim % 2 == 0, "head_dim должен быть четным для RoPE");
+        assert!(head_dim % 2 == 0, "head_dim must be even for RoPE");
 
         let (cos_cached, sin_cached) = Self::precompute_freqs(head_dim, max_len, base);
 
@@ -331,16 +331,16 @@ impl RotaryPositionEmbedding {
         }
     }
 
-    /// Предвычисляет частоты для всех позиций.
+    /// Precomputes frequencies for all positions.
     fn precompute_freqs(head_dim: usize, max_len: usize, base: f32) -> (ArrayD<f32>, ArrayD<f32>) {
         let half_dim = head_dim / 2;
 
-        // Вычисляем inv_freq: 1 / (base^(2i/d)) для i = 0, 1, ..., half_dim-1
+        // Compute inv_freq: 1 / (base^(2i/d)) for i = 0, 1, ..., half_dim-1
         let inv_freq: Vec<f32> = (0..half_dim)
             .map(|i| 1.0 / base.powf(2.0 * i as f32 / head_dim as f32))
             .collect();
 
-        // Вычисляем cos и sin для всех позиций
+        // Compute cos and sin for all positions
         let mut cos_data = vec![0.0f32; max_len * half_dim];
         let mut sin_data = vec![0.0f32; max_len * half_dim];
 
@@ -358,37 +358,37 @@ impl RotaryPositionEmbedding {
         (cos_arr, sin_arr)
     }
 
-    /// Применяет RoPE к query и key тензорам.
+    /// Applies RoPE to query and key tensors.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `query` - Query тензор [batch, num_heads, seq_len, head_dim]
-    /// * `key` - Key тензор [batch, num_heads, seq_len, head_dim]
-    /// * `seq_offset` - Смещение позиции (для incremental decoding)
+    /// * `query` - Query tensor [batch, num_heads, seq_len, head_dim]
+    /// * `key` - Key tensor [batch, num_heads, seq_len, head_dim]
+    /// * `seq_offset` - Position offset (for incremental decoding)
     ///
-    /// # Возвращает
+    /// # Returns
     ///
-    /// Кортеж (rotated_query, rotated_key)
+    /// Tuple (rotated_query, rotated_key)
     pub fn apply(&self, query: &Tensor, key: &Tensor, seq_offset: usize) -> (Tensor, Tensor) {
         let q_rot = self.rotate_half(query, seq_offset);
         let k_rot = self.rotate_half(key, seq_offset);
         (q_rot, k_rot)
     }
 
-    /// Применяет RoPE к одному тензору.
+    /// Applies RoPE to a single tensor.
     fn rotate_half(&self, x: &Tensor, seq_offset: usize) -> Tensor {
         // x: [batch, num_heads, seq_len, head_dim]
-        // Разбиваем head_dim на пары и применяем вращение
+        // Split head_dim into pairs and apply rotation
         //
-        // Для простоты создаем cos и sin тензоры как литералы
-        // В production это должно использовать slice операцию
+        // For simplicity create cos and sin tensors as literals
+        // In production this should use slice operation
 
-        // Получаем cos и sin для нужных позиций
-        // Упрощенная версия: создаем литералы напрямую
+        // Get cos and sin for needed positions
+        // Simplified version: create literals directly
         let half_dim = self.head_dim / 2;
 
-        // Создаем cos и sin тензоры для текущей последовательности
-        // Форма: [1, 1, max_len, half_dim] для broadcasting
+        // Create cos and sin tensors for current sequence
+        // Shape: [1, 1, max_len, half_dim] for broadcasting
         let cos_tensor = Tensor::new_literal(
             &self.context,
             self.cos_cached
@@ -406,23 +406,23 @@ impl RotaryPositionEmbedding {
             "rope_sin",
         );
 
-        // Применяем вращение:
+        // Apply rotation:
         // x_rot = x * cos + rotate_half(x) * sin
-        // где rotate_half(x) переставляет пары: [x0, x1, x2, x3, ...] -> [-x1, x0, -x3, x2, ...]
+        // where rotate_half(x) swaps pairs: [x0, x1, x2, x3, ...] -> [-x1, x0, -x3, x2, ...]
         //
-        // Для упрощения возвращаем x как есть (полная реализация требует slice/concat операций)
-        // TODO: Реализовать полное вращение когда будут доступны slice операции
+        // For simplicity return x as is (full implementation requires slice/concat operations)
+        // TODO: Implement full rotation when slice operations are available
 
-        // Упрощенная версия: добавляем cos как bias
+        // Simplified version: add cos as bias
         x + &cos_tensor
     }
 
-    /// Возвращает предвычисленные косинусы.
+    /// Returns precomputed cosines.
     pub fn get_cos(&self) -> &ArrayD<f32> {
         &self.cos_cached
     }
 
-    /// Возвращает предвычисленные синусы.
+    /// Returns precomputed sines.
     pub fn get_sin(&self) -> &ArrayD<f32> {
         &self.sin_cached
     }
@@ -432,49 +432,49 @@ impl RotaryPositionEmbedding {
 // ALiBi - Attention with Linear Biases
 // ============================================================
 
-/// ALiBi (Attention with Linear Biases) из статьи "Train Short, Test Long".
+/// ALiBi (Attention with Linear Biases) from the paper "Train Short, Test Long".
 ///
-/// ALiBi добавляет линейный bias к attention scores, основанный на расстоянии между позициями.
-/// Это позволяет модели хорошо экстраполировать на последовательности длиннее, чем при обучении.
+/// ALiBi adds linear bias to attention scores based on distance between positions.
+/// This allows the model to extrapolate well to sequences longer than seen during training.
 ///
-/// # Формула:
+/// # Formula:
 /// ```text
 /// attention_scores = QK^T / sqrt(d_k) - m * distance_matrix
-/// где distance_matrix[i][j] = |i - j|
-/// m = 2^(-8/num_heads) для head 0, 2^(-8*2/num_heads) для head 1, и т.д.
+/// where distance_matrix[i][j] = |i - j|
+/// m = 2^(-8/num_heads) for head 0, 2^(-8*2/num_heads) for head 1, etc.
 /// ```
 ///
-/// # Ключевые преимущества:
-/// - Отличная экстраполяция на длинные последовательности
-/// - Не требует обучаемых параметров
-/// - Простая реализация
+/// # Key Advantages:
+/// - Excellent extrapolation to long sequences
+/// - Requires no trainable parameters
+/// - Simple implementation
 ///
-/// # Пример использования
+/// # Usage Example
 ///
 /// ```rust,ignore
 /// let context = Rc::new(RefCell::new(GraphContext::new()));
-/// let alibi = ALiBi::new(&context, 8); // 8 голов
+/// let alibi = ALiBi::new(&context, 8); // 8 heads
 ///
-/// let bias = alibi.get_bias(1024); // bias для seq_len=1024
-/// // Добавить bias к attention scores перед softmax
+/// let bias = alibi.get_bias(1024); // bias for seq_len=1024
+/// // Add bias to attention scores before softmax
 /// ```
 #[derive(Debug, Clone)]
 pub struct ALiBi {
-    /// Количество голов внимания.
+    /// Number of attention heads.
     pub num_heads: usize,
-    /// Предвычисленные slopes для каждой головы.
+    /// Precomputed slopes for each head.
     slopes: Vec<f32>,
-    /// Контекст графа.
+    /// Graph context.
     context: Rc<RefCell<GraphContext>>,
 }
 
 impl ALiBi {
-    /// Создает новый ALiBi слой.
+    /// Creates a new ALiBi layer.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `context` - Контекст графа
-    /// * `num_heads` - Количество голов внимания
+    /// * `context` - Graph context
+    /// * `num_heads` - Number of attention heads
     pub fn new(context: &Rc<RefCell<GraphContext>>, num_heads: usize) -> Self {
         let slopes = Self::compute_slopes(num_heads);
 
@@ -485,9 +485,9 @@ impl ALiBi {
         }
     }
 
-    /// Вычисляет slopes для каждой головы.
+    /// Computes slopes for each head.
     ///
-    /// Для n голов: slopes = [2^(-8/n), 2^(-8*2/n), ..., 2^(-8)]
+    /// For n heads: slopes = [2^(-8/n), 2^(-8*2/n), ..., 2^(-8)]
     fn compute_slopes(num_heads: usize) -> Vec<f32> {
         let ratio = 8.0 / num_heads as f32;
         (1..=num_heads)
@@ -495,15 +495,15 @@ impl ALiBi {
             .collect()
     }
 
-    /// Получает ALiBi bias для заданной длины последовательности.
+    /// Gets ALiBi bias for given sequence length.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `seq_len` - Длина последовательности
+    /// * `seq_len` - Sequence length
     ///
-    /// # Возвращает
+    /// # Returns
     ///
-    /// Tensor формы [1, num_heads, seq_len, seq_len] с bias значениями
+    /// Tensor of shape [1, num_heads, seq_len, seq_len] with bias values
     pub fn get_bias(&self, seq_len: usize) -> Tensor {
         let mut bias_data = vec![0.0f32; self.num_heads * seq_len * seq_len];
 
@@ -511,7 +511,7 @@ impl ALiBi {
             let slope = self.slopes[h];
             for i in 0..seq_len {
                 for j in 0..seq_len {
-                    // Вычисляем distance и применяем slope
+                    // Compute distance and apply slope
                     let distance = (i as i64 - j as i64).abs() as f32;
                     let idx = h * seq_len * seq_len + i * seq_len + j;
                     bias_data[idx] = -slope * distance;
@@ -528,15 +528,15 @@ impl ALiBi {
         Tensor::new_literal(&self.context, bias_arr, "alibi_bias")
     }
 
-    /// Получает causal ALiBi bias (только для позиций <= текущей).
+    /// Gets causal ALiBi bias (only for positions <= current).
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `seq_len` - Длина последовательности
+    /// * `seq_len` - Sequence length
     ///
-    /// # Возвращает
+    /// # Returns
     ///
-    /// Tensor формы [1, num_heads, seq_len, seq_len] с causal bias
+    /// Tensor of shape [1, num_heads, seq_len, seq_len] with causal bias
     pub fn get_causal_bias(&self, seq_len: usize) -> Tensor {
         let mut bias_data = vec![0.0f32; self.num_heads * seq_len * seq_len];
 
@@ -566,7 +566,7 @@ impl ALiBi {
         Tensor::new_literal(&self.context, bias_arr, "alibi_causal_bias")
     }
 
-    /// Возвращает slopes для каждой головы.
+    /// Returns slopes for each head.
     pub fn get_slopes(&self) -> &[f32] {
         &self.slopes
     }
@@ -716,10 +716,10 @@ mod tests {
 
     #[test]
     fn test_sinusoidal_encoding_values() {
-        // Проверяем, что значения вычислены корректно
+        // Check that values are computed correctly
         let encoding = SinusoidalPositionalEncoding::compute_encoding(4, 3);
 
-        // pos=0: все sin должны быть 0, все cos должны быть 1
+        // pos=0: all sin should be 0, all cos should be 1
         assert!((encoding[[0, 0]] - 0.0).abs() < 1e-5); // sin(0) = 0
         assert!((encoding[[0, 1]] - 1.0).abs() < 1e-5); // cos(0) = 1
         assert!((encoding[[0, 2]] - 0.0).abs() < 1e-5); // sin(0) = 0
@@ -745,17 +745,17 @@ mod tests {
         let context = Rc::new(RefCell::new(GraphContext::new()));
         let pos_ids = create_position_ids(&context, 2, 4);
 
-        // Устанавливаем выход
+        // Set output
         context.borrow_mut().main_graph_mut().set_output(pos_ids.node_id);
 
-        // Запускаем
+        // Run
         let backend = CpuBackend::new();
         let graph = context.borrow().main_graph().clone();
         let (results, _) = backend.run(&graph, HashMap::new()).unwrap();
 
         if let Value::Tensor(arr) = &results[0] {
             assert_eq!(arr.shape(), &[2, 4]);
-            // Проверяем значения
+            // Check values
             assert!((arr[[0, 0]] - 0.0).abs() < 1e-5);
             assert!((arr[[0, 1]] - 1.0).abs() < 1e-5);
             assert!((arr[[0, 2]] - 2.0).abs() < 1e-5);
@@ -772,16 +772,16 @@ mod tests {
         let context = Rc::new(RefCell::new(GraphContext::new()));
         let pos_emb = LearnedPositionalEmbedding::new(&context, 5, 3, "pos_emb");
 
-        // Создаем позиционные индексы
+        // Create position indices
         let pos_ids = Tensor::new_input(&context, "pos_ids");
 
         // Forward pass
         let output = pos_emb.forward(&pos_ids);
 
-        // Устанавливаем выход
+        // Set output
         context.borrow_mut().main_graph_mut().set_output(output.node_id);
 
-        // Подготавливаем данные
+        // Prepare data
         let weight_data = ArrayD::from_shape_vec(
             IxDyn(&[5, 3]),
             (0..15).map(|x| x as f32).collect()
@@ -796,7 +796,7 @@ mod tests {
         inputs.insert("pos_ids".to_string(), Value::Tensor(pos_ids_data));
         inputs.insert("pos_emb_weight".to_string(), Value::Tensor(weight_data));
 
-        // Запускаем
+        // Run
         let backend = CpuBackend::new();
         let device_data = backend.load_data(&inputs).unwrap();
 

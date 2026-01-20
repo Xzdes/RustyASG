@@ -1,39 +1,39 @@
-//! Модуль, реализующий полносвязный (линейный) слой в графовой парадигме.
+//! Module implementing the fully connected (linear) layer in the graph paradigm.
 
 use crate::nn::module::Module;
 use crate::tensor::{GraphContext, Tensor};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Полносвязный (линейный) слой.
+/// Fully connected (linear) layer.
 ///
-/// В графовой архитектуре этот слой не хранит реальных данных. Вместо этого
-/// он владеет символьными `Tensor`-дескрипторами, которые представляют его
-/// веса (`weights`) и смещения (`bias`) как узлы `Parameter` в ASG.
+/// In the graph-based architecture, this layer does not store actual data. Instead,
+/// it owns symbolic `Tensor` handles that represent its weights and biases
+/// as `Parameter` nodes in the ASG.
 ///
-/// Метод `forward` добавляет в граф операции, соответствующие формуле `y = xW + b`.
+/// The `forward` method adds operations to the graph corresponding to the formula `y = xW + b`.
 pub struct Linear {
-    /// Символьный дескриптор для тензора весов.
+    /// Symbolic handle for the weights tensor.
     pub weights: Tensor,
-    /// Символьный дескриптор для тензора смещений.
+    /// Symbolic handle for the bias tensor.
     pub bias: Tensor,
 }
 
 impl Linear {
-    /// Создает новый полносвязный слой, регистрируя его параметры в графе.
+    /// Creates a new fully connected layer, registering its parameters in the graph.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `context` - Ссылка на `GraphContext`, в котором будет строиться граф.
-    /// * `name` - Базовое имя для этого слоя, чтобы параметры имели уникальные
-    ///   имена в графе (например, "layer1.weights", "layer1.bias").
+    /// * `context` - Reference to the `GraphContext` where the graph is being built.
+    /// * `name` - Base name for this layer so that parameters have unique names
+    ///   in the graph (e.g., "layer1.weights", "layer1.bias").
     pub fn new(
         context: &Rc<RefCell<GraphContext>>,
         name: &str,
     ) -> Self {
-        // Создаем символьные узлы-параметры в графе.
-        // Реальные значения и формы для этих параметров будут предоставлены
-        // позже, перед запуском выполнения и shape inference.
+        // Create symbolic parameter nodes in the graph.
+        // Actual values and shapes for these parameters will be provided
+        // later, before execution and shape inference.
         let weights_name = format!("{}.weights", name);
         let bias_name = format!("{}.bias", name);
 
@@ -45,16 +45,16 @@ impl Linear {
 }
 
 impl Module for Linear {
-    /// Добавляет в граф операции для прямого прохода через линейный слой.
+    /// Adds operations to the graph for the forward pass through the linear layer.
     ///
-    /// Конструирует подграф, соответствующий `inputs.dot(weights) + bias`.
+    /// Constructs a subgraph corresponding to `inputs.dot(weights) + bias`.
     fn forward(&self, inputs: &Tensor) -> Tensor {
         let dot_product = inputs.dot(&self.weights);
         let final_output = &dot_product + &self.bias;
         final_output
     }
 
-    /// Возвращает список символьных дескрипторов для обучаемых параметров слоя.
+    /// Returns a list of symbolic handles for the layer's trainable parameters.
     fn parameters(&self) -> Vec<Tensor> {
         vec![self.weights.clone(), self.bias.clone()]
     }

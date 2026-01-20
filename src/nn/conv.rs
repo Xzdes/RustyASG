@@ -1,30 +1,30 @@
-// --- Файл: src/nn/conv.rs ---
+// --- File: src/nn/conv.rs ---
 
-//! Модуль, реализующий сверточные слои для обработки изображений.
+//! Module implementing convolutional layers for image processing.
 
 use crate::nn::module::Module;
 use crate::tensor::{GraphContext, Tensor};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Конфигурация для Conv2d слоя.
+/// Configuration for Conv2d layer.
 #[derive(Debug, Clone)]
 pub struct Conv2dConfig {
-    /// Количество входных каналов.
+    /// Number of input channels.
     pub in_channels: usize,
-    /// Количество выходных каналов (фильтров).
+    /// Number of output channels (filters).
     pub out_channels: usize,
-    /// Размер ядра свертки.
+    /// Convolution kernel size.
     pub kernel_size: (usize, usize),
-    /// Шаг свертки.
+    /// Convolution stride.
     pub stride: (usize, usize),
-    /// Паддинг.
+    /// Padding.
     pub padding: (usize, usize),
-    /// Дилатация (расширение ядра).
+    /// Dilation (kernel expansion).
     pub dilation: (usize, usize),
-    /// Количество групп для grouped/depthwise convolution.
+    /// Number of groups for grouped/depthwise convolution.
     pub groups: usize,
-    /// Использовать bias.
+    /// Use bias.
     pub bias: bool,
 }
 
@@ -44,7 +44,7 @@ impl Default for Conv2dConfig {
 }
 
 impl Conv2dConfig {
-    /// Создает конфигурацию Conv2d.
+    /// Creates Conv2d configuration.
     pub fn new(in_channels: usize, out_channels: usize, kernel_size: (usize, usize)) -> Self {
         Self {
             in_channels,
@@ -54,43 +54,43 @@ impl Conv2dConfig {
         }
     }
 
-    /// Устанавливает шаг свертки.
+    /// Sets convolution stride.
     pub fn with_stride(mut self, stride: (usize, usize)) -> Self {
         self.stride = stride;
         self
     }
 
-    /// Устанавливает паддинг.
+    /// Sets padding.
     pub fn with_padding(mut self, padding: (usize, usize)) -> Self {
         self.padding = padding;
         self
     }
 
-    /// Устанавливает дилатацию.
+    /// Sets dilation.
     pub fn with_dilation(mut self, dilation: (usize, usize)) -> Self {
         self.dilation = dilation;
         self
     }
 
-    /// Устанавливает количество групп.
+    /// Sets number of groups.
     pub fn with_groups(mut self, groups: usize) -> Self {
         self.groups = groups;
         self
     }
 
-    /// Включает/выключает bias.
+    /// Enables/disables bias.
     pub fn with_bias(mut self, bias: bool) -> Self {
         self.bias = bias;
         self
     }
 }
 
-/// 2D Сверточный слой.
+/// 2D Convolutional layer.
 ///
-/// Применяет 2D свертку к входному тензору формы [N, C_in, H, W].
-/// Выходной тензор имеет форму [N, C_out, H_out, W_out].
+/// Applies 2D convolution to input tensor of shape [N, C_in, H, W].
+/// Output tensor has shape [N, C_out, H_out, W_out].
 ///
-/// # Пример
+/// # Example
 ///
 /// ```rust,ignore
 /// use rustyasg::nn::{Conv2d, Module};
@@ -100,24 +100,24 @@ impl Conv2dConfig {
 /// let output = conv.forward(&input);
 /// ```
 pub struct Conv2d {
-    /// Символьный дескриптор для тензора весов [C_out, C_in/groups, kH, kW].
+    /// Symbolic descriptor for weight tensor [C_out, C_in/groups, kH, kW].
     pub weight: Tensor,
-    /// Опциональный символьный дескриптор для bias [C_out].
+    /// Optional symbolic descriptor for bias [C_out].
     pub bias: Option<Tensor>,
-    /// Конфигурация слоя.
+    /// Layer configuration.
     pub config: Conv2dConfig,
 }
 
 impl Conv2d {
-    /// Создает новый Conv2d слой с базовыми параметрами.
+    /// Creates a new Conv2d layer with basic parameters.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `context` - Ссылка на GraphContext
-    /// * `name` - Базовое имя для параметров
-    /// * `in_channels` - Количество входных каналов
-    /// * `out_channels` - Количество выходных каналов
-    /// * `kernel_size` - Размер ядра (kH, kW)
+    /// * `context` - Reference to GraphContext
+    /// * `name` - Base name for parameters
+    /// * `in_channels` - Number of input channels
+    /// * `out_channels` - Number of output channels
+    /// * `kernel_size` - Kernel size (kH, kW)
     pub fn new(
         context: &Rc<RefCell<GraphContext>>,
         name: &str,
@@ -129,7 +129,7 @@ impl Conv2d {
         Self::from_config(context, name, config)
     }
 
-    /// Создает Conv2d слой из конфигурации.
+    /// Creates Conv2d layer from configuration.
     pub fn from_config(
         context: &Rc<RefCell<GraphContext>>,
         name: &str,
@@ -148,25 +148,25 @@ impl Conv2d {
         Self { weight, bias, config }
     }
 
-    /// Устанавливает шаг свертки.
+    /// Sets convolution stride.
     pub fn with_stride(mut self, stride: (usize, usize)) -> Self {
         self.config.stride = stride;
         self
     }
 
-    /// Устанавливает паддинг.
+    /// Sets padding.
     pub fn with_padding(mut self, padding: (usize, usize)) -> Self {
         self.config.padding = padding;
         self
     }
 
-    /// Устанавливает дилатацию.
+    /// Sets dilation.
     pub fn with_dilation(mut self, dilation: (usize, usize)) -> Self {
         self.config.dilation = dilation;
         self
     }
 
-    /// Устанавливает количество групп.
+    /// Sets number of groups.
     pub fn with_groups(mut self, groups: usize) -> Self {
         self.config.groups = groups;
         self
@@ -174,7 +174,7 @@ impl Conv2d {
 }
 
 impl Module for Conv2d {
-    /// Применяет свертку к входу.
+    /// Applies convolution to input.
     fn forward(&self, inputs: &Tensor) -> Tensor {
         inputs.conv2d(
             &self.weight,
@@ -186,7 +186,7 @@ impl Module for Conv2d {
         )
     }
 
-    /// Возвращает обучаемые параметры слоя.
+    /// Returns trainable parameters of the layer.
     fn parameters(&self) -> Vec<Tensor> {
         let mut params = vec![self.weight.clone()];
         if let Some(ref bias) = self.bias {
@@ -196,29 +196,29 @@ impl Module for Conv2d {
     }
 }
 
-/// Транспонированный 2D сверточный слой (деконволюция).
+/// Transposed 2D convolutional layer (deconvolution).
 ///
-/// Используется для увеличения пространственных размеров (upsampling),
-/// например в декодерах автоэнкодеров и генераторах GAN.
+/// Used for increasing spatial dimensions (upsampling),
+/// for example in autoencoder decoders and GAN generators.
 pub struct ConvTranspose2d {
-    /// Веса [C_in, C_out/groups, kH, kW].
+    /// Weights [C_in, C_out/groups, kH, kW].
     pub weight: Tensor,
-    /// Опциональный bias [C_out].
+    /// Optional bias [C_out].
     pub bias: Option<Tensor>,
-    /// Шаг.
+    /// Stride.
     pub stride: (usize, usize),
-    /// Паддинг.
+    /// Padding.
     pub padding: (usize, usize),
-    /// Выходной паддинг.
+    /// Output padding.
     pub output_padding: (usize, usize),
-    /// Дилатация.
+    /// Dilation.
     pub dilation: (usize, usize),
-    /// Количество групп.
+    /// Number of groups.
     pub groups: usize,
 }
 
 impl ConvTranspose2d {
-    /// Создает новый ConvTranspose2d слой.
+    /// Creates a new ConvTranspose2d layer.
     pub fn new(
         context: &Rc<RefCell<GraphContext>>,
         name: &str,
@@ -312,7 +312,7 @@ mod tests {
 
         let output = conv.forward(&input);
 
-        // Проверяем, что граф содержит Conv2d операцию
+        // Check that graph contains Conv2d operation
         let graph = context.borrow().main_graph().clone();
         assert!(graph.nodes.len() > 2); // input + weight + bias + conv2d
     }

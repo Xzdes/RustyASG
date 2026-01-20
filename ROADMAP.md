@@ -1,48 +1,48 @@
 # RustyASG Roadmap
 
-Этот документ описывает план развития проекта RustyASG и текущий прогресс реализации.
+This document describes the development plan for the RustyASG project and current implementation progress.
 
-## Текущий статус
+## Current Status
 
-RustyASG находится в активной разработке. Большинство базовых компонентов production-ready deep learning фреймворка уже реализованы.
+RustyASG is in active development. Most basic components of a production-ready deep learning framework have been implemented.
 
-### Реализованные компоненты
+### Implemented Components
 
-#### Ядро фреймворка
-- [x] ASG (Abstract Semantic Graph) архитектура
+#### Framework Core
+- [x] ASG (Abstract Semantic Graph) architecture
 - [x] Define-then-run execution model
 - [x] Tensor API
 - [x] CPU Backend (ndarray)
 - [x] GPU Backend (wgpu/WebGPU)
-- [x] Shape Inference и статический анализ
-- [x] Интерактивная визуализация графа (egui)
+- [x] Shape Inference and static analysis
+- [x] Interactive graph visualization (egui)
 
-#### Автоматическое дифференцирование
-- [x] Граф-в-граф autograd
-- [x] Поддержка базовых операций (Add, Sub, Mul, Div, MatMul)
-- [x] ReLU и его градиент
-- [x] Softmax и его градиент
-- [x] Sigmoid, Tanh, Exp, Log, Neg и их градиенты
-- [x] LeakyReLU, ELU, GELU, SiLU, Softplus, Abs, Clamp градиенты
-- [x] Power и его градиент
-- [x] MaxPool2d и его градиент (через MaxUnpool2d)
-- [x] AvgPool2d и его градиент (через AvgUnpool2d)
-- [x] Embedding и его градиент (EmbeddingGrad scatter-add)
-- [x] LayerNorm autograd (полная реализация с LayerNormBackward, LayerNormGradGamma, LayerNormGradBeta)
-- [x] Conv2d autograd (backward pass через Conv2dBackwardInput и Conv2dBackwardWeight)
-- [x] Транспонирование и reshape
+#### Automatic Differentiation
+- [x] Graph-to-graph autograd
+- [x] Support for basic operations (Add, Sub, Mul, Div, MatMul)
+- [x] ReLU and its gradient
+- [x] Softmax and its gradient
+- [x] Sigmoid, Tanh, Exp, Log, Neg and their gradients
+- [x] LeakyReLU, ELU, GELU, SiLU, Softplus, Abs, Clamp gradients
+- [x] Power and its gradient
+- [x] MaxPool2d and its gradient (via MaxUnpool2d)
+- [x] AvgPool2d and its gradient (via AvgUnpool2d)
+- [x] Embedding and its gradient (EmbeddingGrad scatter-add)
+- [x] LayerNorm autograd (full implementation with LayerNormBackward, LayerNormGradGamma, LayerNormGradBeta)
+- [x] Conv2d autograd (backward pass via Conv2dBackwardInput and Conv2dBackwardWeight)
+- [x] Transpose and reshape
 
-#### Нейросетевые слои (`nn`)
-- [x] Linear (полносвязный слой)
-- [x] LayerNorm (полная поддержка autograd)
+#### Neural Network Layers (`nn`)
+- [x] Linear (fully connected layer)
+- [x] LayerNorm (full autograd support)
 - [x] BatchNorm
-- [x] Dropout и SpatialDropout
-- [x] Conv2d (2D свертка с padding, stride, dilation, groups)
-- [x] ConvTranspose2d (транспонированная свертка)
+- [x] Dropout and SpatialDropout
+- [x] Conv2d (2D convolution with padding, stride, dilation, groups)
+- [x] ConvTranspose2d (transposed convolution)
 - [x] MaxPool2d
 - [x] AvgPool2d
 - [x] AdaptiveAvgPool2d (Global Average Pooling)
-- [x] Embedding (lookup слой для NLP)
+- [x] Embedding (lookup layer for NLP)
 
 #### Positional Encoding
 - [x] Sinusoidal Positional Encoding
@@ -51,11 +51,11 @@ RustyASG находится в активной разработке. Больш
 - [x] ALiBi
 
 #### Attention
-- [x] Multi-Head Attention с масками (causal, padding)
+- [x] Multi-Head Attention with masks (causal, padding)
 - [x] Scaled Dot-Product Attention
 - [x] Cross-Attention support
 
-#### Функции активации
+#### Activation Functions
 - [x] ReLU
 - [x] LeakyReLU
 - [x] GELU
@@ -66,8 +66,8 @@ RustyASG находится в активной разработке. Больш
 - [x] Softplus
 - [x] Softmax
 
-#### Оптимизаторы
-- [x] SGD (с momentum, weight decay, Nesterov)
+#### Optimizers
+- [x] SGD (with momentum, weight decay, Nesterov)
 - [x] Adam
 - [x] AdamW
 - [x] RMSprop
@@ -83,11 +83,11 @@ RustyASG находится в активной разработке. Больш
 - [x] clip_grad_norm
 - [x] clip_grad_value
 
-#### Loss функции
+#### Loss Functions
 - [x] MSE Loss
 - [x] L1 Loss
 - [x] Smooth L1 / Huber Loss
-- [x] Cross Entropy Loss (с label smoothing)
+- [x] Cross Entropy Loss (with label smoothing)
 - [x] Binary Cross Entropy
 - [x] BCE with Logits
 - [x] KL Divergence
@@ -98,24 +98,24 @@ RustyASG находится в активной разработке. Больш
 - [x] Triplet Margin Loss
 - [x] Margin Ranking Loss
 
-#### Сериализация
-- [x] SafeTensors формат (сохранение/загрузка)
-- [x] Checkpoint система (веса + optimizer state + metadata)
-- [x] CheckpointManager (автоматическая ротация)
+#### Serialization
+- [x] SafeTensors format (save/load)
+- [x] Checkpoint system (weights + optimizer state + metadata)
+- [x] CheckpointManager (automatic rotation)
 
 #### Data Pipeline
-- [x] Dataset trait и InMemoryDataset
+- [x] Dataset trait and InMemoryDataset
 - [x] MapDataset (lazy transforms)
 - [x] ConcatDataset
 - [x] SubsetDataset
 - [x] train_test_split
-- [x] DataLoader с batching
+- [x] DataLoader with batching
 - [x] Samplers (Sequential, Random, Weighted, Batch)
 - [x] Transforms (Normalize, MinMaxScale, OneHot, Clip, Log, Flatten, RandomNoise)
 
 #### Metrics
 - [x] Classification: Accuracy, Precision, Recall, F1Score
-- [x] Confusion Matrix (Binary и MultiClass)
+- [x] Confusion Matrix (Binary and MultiClass)
 - [x] TopKAccuracy
 - [x] Regression: MSE, RMSE, MAE, R², MAPE, ExplainedVariance, MaxError
 - [x] Running statistics (RunningMean, RunningStd, EMA)
@@ -124,138 +124,138 @@ RustyASG находится в активной разработке. Больш
 
 ---
 
-## План развития
+## Development Plan
 
-### Фаза 1: Критические исправления (High Priority)
+### Phase 1: Critical Fixes (High Priority)
 
-#### 1.1 ~~Исправить LayerNorm autograd~~ ✅ DONE
-**Статус:** Завершено
-**Описание:**
-Реализованы специализированные NodeType операции для корректного autograd:
+#### 1.1 ~~Fix LayerNorm autograd~~ ✅ DONE
+**Status:** Completed
+**Description:**
+Implemented specialized NodeType operations for correct autograd:
 - `LayerNorm` - forward pass
-- `LayerNormBackward` - градиент по входу x с учётом зависимостей через mean и variance
-- `LayerNormGradGamma` - градиент по параметру gamma
-- `LayerNormGradBeta` - градиент по параметру beta
+- `LayerNormBackward` - gradient w.r.t. input x considering dependencies through mean and variance
+- `LayerNormGradGamma` - gradient w.r.t. gamma parameter
+- `LayerNormGradBeta` - gradient w.r.t. beta parameter
 
-Все gradient check тесты проходят.
+All gradient check tests pass.
 
 #### 1.2 ~~Conv2d autograd~~ ✅ DONE
-**Статус:** Завершено
-**Описание:**
-Реализованы backward операции для Conv2d:
-- `Conv2dBackwardInput` - градиент по входу (транспонированная свертка)
-- `Conv2dBackwardWeight` - градиент по весам
+**Status:** Completed
+**Description:**
+Implemented backward operations for Conv2d:
+- `Conv2dBackwardInput` - gradient w.r.t. input (transposed convolution)
+- `Conv2dBackwardWeight` - gradient w.r.t. weights
 
-Все gradient check тесты проходят (5 тестов: basic, with_padding, with_stride, multi_channel, input).
+All gradient check tests pass (5 tests: basic, with_padding, with_stride, multi_channel, input).
 
 ---
 
-### Фаза 2: Сверточные операции (Medium Priority)
+### Phase 2: Convolution Operations (Medium Priority)
 
 #### 2.1 Conv2d ✅ DONE
-**Статус:** Завершено
-**Описание:**
-2D свертка полностью реализована с поддержкой autograd.
+**Status:** Completed
+**Description:**
+2D convolution fully implemented with autograd support.
 
-**Реализовано:**
-- [x] NodeType::Conv2d с параметрами (kernel_size, stride, padding, dilation, groups)
-- [x] CPU реализация (im2col + matmul)
-- [x] Autograd для Conv2d (Conv2dBackwardInput, Conv2dBackwardWeight)
-- [ ] GPU реализация (WGSL шейдер)
-- [ ] Depthwise и Grouped convolutions
+**Implemented:**
+- [x] NodeType::Conv2d with parameters (kernel_size, stride, padding, dilation, groups)
+- [x] CPU implementation (im2col + matmul)
+- [x] Autograd for Conv2d (Conv2dBackwardInput, Conv2dBackwardWeight)
+- [ ] GPU implementation (WGSL shader)
+- [ ] Depthwise and Grouped convolutions
 
-#### 2.2 Pooling операции
-**Статус:** Pending
-**Сложность:** Средняя
+#### 2.2 Pooling Operations
+**Status:** Pending
+**Complexity:** Medium
 
-**Задачи:**
-- [ ] MaxPool2d (с возвратом индексов для backward)
+**Tasks:**
+- [ ] MaxPool2d (with index return for backward)
 - [ ] AvgPool2d
 - [ ] AdaptiveAvgPool2d
 - [ ] AdaptiveMaxPool2d
 - [ ] GlobalAveragePooling
 
 #### 2.3 Transposed Convolution
-**Статус:** Pending
-**Сложность:** Средняя
+**Status:** Pending
+**Complexity:** Medium
 
-**Задачи:**
-- [ ] ConvTranspose2d для декодеров и генеративных моделей
+**Tasks:**
+- [ ] ConvTranspose2d for decoders and generative models
 
 ---
 
-### Фаза 3: Расширение Transformer поддержки
+### Phase 3: Transformer Support Extension
 
 #### 3.1 Multi-Head Attention
-**Статус:** Pending
-**Сложность:** Средняя
-**Описание:**
-Полноценная реализация MHA с масками.
+**Status:** Pending
+**Complexity:** Medium
+**Description:**
+Full MHA implementation with masks.
 
-**Задачи:**
+**Tasks:**
 - [ ] Scaled Dot-Product Attention
-- [ ] Multi-Head Attention с проекциями
+- [ ] Multi-Head Attention with projections
 - [ ] Attention masks (causal, padding)
-- [ ] Flash Attention оптимизация (GPU)
+- [ ] Flash Attention optimization (GPU)
 
 #### 3.2 Positional Encoding
-**Статус:** In Progress
+**Status:** In Progress
 
-**Задачи:**
+**Tasks:**
 - [x] Sinusoidal Positional Encoding
 - [x] Learned Positional Embeddings
 - [ ] Rotary Position Embeddings (RoPE)
 - [ ] ALiBi
 
-#### 3.3 Embedding слои
-**Статус:** Done ✅
+#### 3.3 Embedding Layers
+**Status:** Done ✅
 
-**Задачи:**
+**Tasks:**
 - [x] nn::Embedding
 - [ ] nn::EmbeddingBag
 
 ---
 
-### Фаза 4: Оптимизации производительности
+### Phase 4: Performance Optimizations
 
 #### 4.1 Kernel Fusion
-**Статус:** Pending
-**Сложность:** Высокая
-**Описание:**
-Объединение последовательных операций в один WGSL шейдер.
+**Status:** Pending
+**Complexity:** High
+**Description:**
+Combining sequential operations into a single WGSL shader.
 
-**Задачи:**
-- [ ] Pattern detection для fusable операций
-- [ ] Code generation для fused kernels
+**Tasks:**
+- [ ] Pattern detection for fusable operations
+- [ ] Code generation for fused kernels
 - [ ] Bias + Activation fusion
 - [ ] LayerNorm fusion
 
 #### 4.2 Memory Management
-**Статус:** Pending
-**Сложность:** Средняя
+**Status:** Pending
+**Complexity:** Medium
 
-**Задачи:**
+**Tasks:**
 - [ ] GPU Buffer pooling
 - [ ] Memory reuse analysis
 - [ ] Gradient checkpointing
 - [ ] Mixed precision support (f16)
 
 #### 4.3 Parallelization
-**Статус:** Pending
+**Status:** Pending
 
-**Задачи:**
+**Tasks:**
 - [ ] Data parallelism (multi-GPU)
 - [ ] Async data loading
 - [ ] Pipeline parallelism
 
 ---
 
-### Фаза 5: Расширение экосистемы
+### Phase 5: Ecosystem Extension
 
 #### 5.1 Model Zoo
-**Статус:** Pending
+**Status:** Pending
 
-**Задачи:**
+**Tasks:**
 - [ ] MLP
 - [ ] CNN (LeNet, ResNet blocks)
 - [ ] Transformer Encoder/Decoder
@@ -263,17 +263,17 @@ RustyASG находится в активной разработке. Больш
 - [ ] Vision Transformer (ViT)
 
 #### 5.2 Pre-trained Models
-**Статус:** Pending
+**Status:** Pending
 
-**Задачи:**
-- [ ] Загрузка весов из HuggingFace (SafeTensors)
-- [ ] Конвертер из PyTorch checkpoint
-- [ ] Model Hub интеграция
+**Tasks:**
+- [ ] Load weights from HuggingFace (SafeTensors)
+- [ ] Converter from PyTorch checkpoint
+- [ ] Model Hub integration
 
 #### 5.3 Datasets
-**Статус:** Pending
+**Status:** Pending
 
-**Задачи:**
+**Tasks:**
 - [ ] MNIST loader
 - [ ] CIFAR-10/100 loader
 - [ ] ImageNet loader
@@ -281,32 +281,32 @@ RustyASG находится в активной разработке. Больш
 
 ---
 
-### Фаза 6: Developer Experience
+### Phase 6: Developer Experience
 
-#### 6.1 Улучшения визуализатора
-**Статус:** Pending
+#### 6.1 Visualizer Improvements
+**Status:** Pending
 
-**Задачи:**
-- [ ] Переключение между forward/gradient графами
-- [ ] Подробная информация об узлах (hover)
-- [ ] Подсветка путей
-- [ ] Экспорт графа в PNG/SVG
-- [ ] Поиск узлов
+**Tasks:**
+- [ ] Toggle between forward/gradient graphs
+- [ ] Detailed node information (hover)
+- [ ] Path highlighting
+- [ ] Export graph to PNG/SVG
+- [ ] Node search
 
-#### 6.2 Debugging и Profiling
-**Статус:** Pending
+#### 6.2 Debugging and Profiling
+**Status:** Pending
 
-**Задачи:**
+**Tasks:**
 - [ ] Tensor value inspection
 - [ ] Gradient checking utilities
 - [ ] Memory profiler
 - [ ] Performance profiler
 - [ ] Operation timing
 
-#### 6.3 Документация
-**Статус:** Pending
+#### 6.3 Documentation
+**Status:** Pending
 
-**Задачи:**
+**Tasks:**
 - [ ] API documentation (rustdoc)
 - [ ] Tutorials
 - [ ] Examples (MNIST, Text classification)
@@ -314,59 +314,59 @@ RustyASG находится в активной разработке. Больш
 
 ---
 
-### Фаза 7: Production Features
+### Phase 7: Production Features
 
 #### 7.1 Model Export
-**Статус:** Pending
+**Status:** Pending
 
-**Задачи:**
+**Tasks:**
 - [ ] ONNX export
 - [ ] TorchScript-like serialization
-- [ ] Inference-only mode (без autograd overhead)
+- [ ] Inference-only mode (without autograd overhead)
 
 #### 7.2 Deployment
-**Статус:** Pending
+**Status:** Pending
 
-**Задачи:**
+**Tasks:**
 - [ ] WebAssembly target
-- [ ] Mobile support (iOS/Android через wgpu)
+- [ ] Mobile support (iOS/Android via wgpu)
 - [ ] Server deployment utilities
 
 #### 7.3 Distributed Training
-**Статус:** Future
+**Status:** Future
 
-**Задачи:**
+**Tasks:**
 - [ ] Distributed data parallel
 - [ ] Gradient synchronization
 - [ ] Model sharding
 
 ---
 
-## Приоритеты
+## Priorities
 
-### Критические (блокируют production use)
+### Critical (blocking production use)
 1. ~~LayerNorm autograd fix~~ ✅ DONE
-2. ~~Conv2d операция~~ ✅ DONE
+2. ~~Conv2d operation~~ ✅ DONE
 3. Improved error messages (in progress)
 
-### Высокие (значительно улучшат usability)
+### High (significantly improve usability)
 1. ~~Multi-Head Attention~~ ✅ DONE
 2. Model checkpointing improvements
 3. Better documentation
 
-### Средние (nice to have)
+### Medium (nice to have)
 1. Kernel fusion
 2. Model zoo
 3. Visualizer improvements
 
-### Низкие (future)
+### Low (future)
 1. Distributed training
 2. WebAssembly deployment
 3. Mobile support
 
 ---
 
-## Сравнение с конкурентами
+## Comparison with Competitors
 
 | Feature | RustyASG | Burn | Candle | PyTorch |
 |---------|----------|------|--------|---------|
@@ -381,25 +381,25 @@ RustyASG находится в активной разработке. Больш
 | Distributed | No | Yes | No | Yes |
 | WebAssembly | Planned | Yes | No | No |
 
-### Уникальные преимущества RustyASG
-1. **Встроенная визуализация графа** - уникальная возможность для отладки
-2. **Define-then-run** - позволяет глобальные оптимизации
-3. **Чистая Rust архитектура** - без Python/C++ зависимостей
-4. **Образовательная ценность** - хорошо структурированный код
+### Unique Advantages of RustyASG
+1. **Built-in graph visualization** - unique debugging capability
+2. **Define-then-run** - enables global optimizations
+3. **Pure Rust architecture** - no Python/C++ dependencies
+4. **Educational value** - well-structured code
 
 ---
 
 ## Contributing
 
-Мы приветствуем вклад в развитие проекта! Особенно ценны:
+We welcome contributions to the project! Especially valuable are:
 
-1. **Bug reports** - особенно связанные с autograd
-2. **Performance improvements** - GPU оптимизации
+1. **Bug reports** - especially related to autograd
+2. **Performance improvements** - GPU optimizations
 3. **New operations** - Conv2d, Attention, etc.
-4. **Documentation** - примеры, туториалы
+4. **Documentation** - examples, tutorials
 5. **Testing** - gradient checking, edge cases
 
-См. [CONTRIBUTING.md](CONTRIBUTING.md) для деталей.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ---
 
@@ -417,4 +417,4 @@ RustyASG находится в активной разработке. Больш
 
 ---
 
-*Последнее обновление: Январь 2026*
+*Last updated: January 2026*

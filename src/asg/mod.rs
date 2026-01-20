@@ -1,60 +1,60 @@
-//! Модуль, определяющий ядро Абстрактного Семантического Графа (ASG).
+//! Module defining the core of the Abstract Semantic Graph (ASG).
 //!
-//! ASG - это фундаментальное представление любой вычислительной задачи в
-//! экосистеме `RustyGradients`. Вместо немедленного выполнения операций,
-//! фреймворк сначала строит граф, который описывает данные и последовательность
-//! операций над ними.
+//! ASG is the fundamental representation of any computational task in the
+//! `RustyGradients` ecosystem. Instead of immediately executing operations,
+//! the framework first builds a graph that describes data and the sequence
+//! of operations on them.
 //!
-//! Этот подход позволяет проводить сложный анализ графа, его оптимизацию,
-//! JIT-компиляцию для различных бэкендов (CPU, GPU) и автоматическое
-//! дифференцирование.
+//! This approach enables complex graph analysis, optimization,
+//! JIT compilation for various backends (CPU, GPU), and automatic
+//! differentiation.
 //!
-//! # Ключевые компоненты:
+//! # Key Components:
 //!
-//! - `Asg`: Сам граф, коллекция узлов и информация о его входах/выходах.
-//! - `Node`: Узел в графе, представляющий либо данные, либо операцию.
-//! - `NodeType`: Перечисление всех возможных операций (математика, логика, I/O).
-//! - `Value`: Перечисление всех возможных типов данных, с которыми оперирует граф.
-//! - `NodeId`, `AsgId`: Уникальные идентификаторы для узлов и графов.
-//! - `Shape`, `DType`: Информация о форме и типе данных тензора на уровне графа.
+//! - `Asg`: The graph itself, a collection of nodes and information about its inputs/outputs.
+//! - `Node`: A node in the graph, representing either data or an operation.
+//! - `NodeType`: Enumeration of all possible operations (math, logic, I/O).
+//! - `Value`: Enumeration of all possible data types that the graph operates on.
+//! - `NodeId`, `AsgId`: Unique identifiers for nodes and graphs.
+//! - `Shape`, `DType`: Information about tensor shape and data type at the graph level.
 
 use ndarray::ArrayD;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
-/// Уникальный идентификатор для узла в графе.
+/// Unique identifier for a node in the graph.
 pub type NodeId = usize;
 
-/// Уникальный идентификатор для самого графа (полезно для вложенных графов).
+/// Unique identifier for the graph itself (useful for nested graphs).
 pub type AsgId = usize;
 
-/// Представление формы (размерностей) тензора.
+/// Representation of tensor shape (dimensions).
 pub type Shape = Vec<usize>;
 
-/// Тип `Result` для операций, связанных с ASG.
+/// Result type for ASG-related operations.
 pub type AsgResult<T> = std::result::Result<T, AsgError>;
 
-/// Ошибки, которые могут возникнуть при работе с ASG.
+/// Errors that can occur when working with ASG.
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum AsgError {
-    #[error("Узел с ID {0} не найден в графе. \
-             Проверьте, что узел был добавлен в граф с помощью add_node() перед его использованием.")]
+    #[error("Node with ID {0} not found in graph. \
+             Verify that the node was added to the graph using add_node() before use.")]
     NodeNotFound(NodeId),
 
-    #[error("Вход с именем '{0}' не найден в графе. \
-             Убедитесь, что Input узел был создан с таким именем.")]
+    #[error("Input with name '{0}' not found in graph. \
+             Ensure that an Input node was created with this name.")]
     InputNotFound(String),
 
-    #[error("Некорректная структура графа: {0}")]
+    #[error("Invalid graph structure: {0}")]
     InvalidGraph(String),
 
-    #[error("Циклическая зависимость обнаружена в графе. \
-             ASG должен быть ациклическим направленным графом (DAG).")]
+    #[error("Cyclic dependency detected in graph. \
+             ASG must be a directed acyclic graph (DAG).")]
     CyclicDependency,
 }
 
-/// Перечисление базовых типов данных, поддерживаемых на уровне графа.
+/// Enumeration of basic data types supported at the graph level.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum DType {
     F32,
@@ -62,74 +62,72 @@ pub enum DType {
     Bool,
 }
 
-/// Перечисление всех возможных типов данных (значений), которые могут
-/// существовать в графе во время выполнения.
+/// Enumeration of all possible data types (values) that can exist
+/// in the graph during execution.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
-    /// Стандартный многомерный массив (тензор) для численных вычислений.
+    /// Standard multidimensional array (tensor) for numerical computations.
     Tensor(ArrayD<f32>),
-    /// 64-битное целое число.
+    /// 64-bit integer.
     Integer(i64),
-    /// 32-битное число с плавающей запятой.
+    /// 32-bit floating point number.
     Float(f32),
-    /// Логическое значение.
+    /// Boolean value.
     Boolean(bool),
-    /// Строка текста.
+    /// Text string.
     Text(String),
-    /// Тип "пустота", аналог `()` в Rust. Используется для операций, которые
-    /// не возвращают значимого результата (например, `Print`).
+    /// Unit type, analogous to `()` in Rust. Used for operations that
+    /// don't return a meaningful result (e.g., `Print`).
     Unit,
 }
 
-/// Узел в Абстрактном Семантическом Графе.
+/// A node in the Abstract Semantic Graph.
 ///
-/// Каждый узел имеет уникальный ID и тип, который определяет, является ли узел
-/// данными (например, `Literal`) или операцией (`MatrixMultiply`).
-/// Также хранит мета-информацию о форме и типе данных, вычисленную
-/// на этапе Shape Inference.
+/// Each node has a unique ID and a type that determines whether the node is
+/// data (e.g., `Literal`) or an operation (`MatrixMultiply`).
+/// Also stores meta-information about shape and data type, computed
+/// during Shape Inference.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Node {
-    /// Уникальный ID узла внутри его графа.
+    /// Unique ID of the node within its graph.
     pub id: NodeId,
-    /// Необязательное имя для отладки и визуализации.
+    /// Optional name for debugging and visualization.
     pub name: Option<String>,
-    /// Тип узла, определяющий его поведение.
+    /// Node type that determines its behavior.
     pub node_type: NodeType,
-    /// Форма тензора, который производит этот узел. `None`, если еще не вычислено.
+    /// Shape of the tensor produced by this node. `None` if not yet computed.
     pub shape: Option<Shape>,
-    /// Тип данных тензора. `None`, если еще не вычислено.
+    /// Data type of the tensor. `None` if not yet computed.
     pub dtype: Option<DType>,
 }
 
-/// Перечисление всех возможных операций и типов данных в графе.
+/// Enumeration of all possible operations and data types in the graph.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum NodeType {
-    // --- Узлы данных и входов ---
-    /// Входной узел графа. Определяет публичный API графа.
+    // --- Data and Input Nodes ---
+    /// Input node of the graph. Defines the public API of the graph.
     Input { name: String },
-    /// Обучаемый параметр модели (например, веса или смещения).
+    /// Trainable model parameter (e.g., weights or biases).
     Parameter { name: String },
-    /// Константное значение (литерал), встроенное прямо в граф.
+    /// Constant value (literal) embedded directly in the graph.
     Literal(Value),
-    /// Ссылка на узел в другом, "внешнем" графе.
-    /// Используется в графе градиентов, чтобы ссылаться на значения
-    /// из графа прямого прохода.
+    /// Reference to a node in another "external" graph.
+    /// Used in gradient graph to reference values from the forward pass graph.
     External {
         name: String,
         source_asg_id: AsgId,
         source_node_id: NodeId,
     },
 
-    // --- Математические и логические операции ---
+    // --- Mathematical and Logical Operations ---
     Add(NodeId, NodeId),
     Subtract(NodeId, NodeId),
     Multiply(NodeId, NodeId),
     Divide(NodeId, NodeId),
     MatrixMultiply(NodeId, NodeId),
-    GreaterThan(NodeId, NodeId), // Поэлементное сравнение >
+    GreaterThan(NodeId, NodeId), // Element-wise comparison >
 
-
-    // --- Поэлементные операции ---
+    // --- Element-wise Operations ---
     ReLU(NodeId),
     Sigmoid(NodeId),
     Log(NodeId),
@@ -137,77 +135,77 @@ pub enum NodeType {
     Exp(NodeId),
     Abs(NodeId),
     Neg(NodeId),
-    Power(NodeId, NodeId), // Второй аргумент - степень (может быть константой)
-    Softmax(NodeId), // Softmax по последней оси
+    Power(NodeId, NodeId), // Second argument is the exponent (can be a constant)
+    Softmax(NodeId),       // Softmax along the last axis
 
-    // --- Дополнительные активации ---
+    // --- Additional Activations ---
     Tanh(NodeId),
     LeakyReLU(NodeId, f32), // (input, negative_slope)
     GELU(NodeId),
-    SiLU(NodeId), // также известен как Swish
+    SiLU(NodeId), // also known as Swish
     ELU(NodeId, f32), // (input, alpha)
     Softplus(NodeId, f32), // (input, beta)
     Clamp(NodeId, f32, f32), // (input, min, max)
 
-    // --- Операции свертки/редукции ---
-    Sum(NodeId), // Сумма всех элементов тензора
-    Mean(NodeId), // Среднее по последней оси
-    Variance(NodeId), // Дисперсия по последней оси
+    // --- Reduction Operations ---
+    Sum(NodeId),      // Sum of all tensor elements
+    Mean(NodeId),     // Mean along the last axis
+    Variance(NodeId), // Variance along the last axis
 
-    // --- Embedding операции ---
-    /// Embedding lookup: преобразует индексы в плотные векторы.
-    /// indices: [*] (любая форма), weight: [num_embeddings, embedding_dim]
-    /// Выход: [*, embedding_dim]
+    // --- Embedding Operations ---
+    /// Embedding lookup: transforms indices into dense vectors.
+    /// indices: [*] (any shape), weight: [num_embeddings, embedding_dim]
+    /// Output: [*, embedding_dim]
     Embedding {
-        /// Тензор индексов (целые числа, представленные как f32).
+        /// Index tensor (integers represented as f32).
         indices: NodeId,
-        /// Матрица embeddings формы [num_embeddings, embedding_dim].
+        /// Embedding matrix of shape [num_embeddings, embedding_dim].
         weight: NodeId,
     },
-    /// Градиент для Embedding: scatter-add операция.
-    /// Аккумулирует градиенты в матрицу весов по индексам.
+    /// Gradient for Embedding: scatter-add operation.
+    /// Accumulates gradients into the weight matrix by indices.
     /// grad_output: [*, embedding_dim], indices: [*]
-    /// Выход: [num_embeddings, embedding_dim]
+    /// Output: [num_embeddings, embedding_dim]
     EmbeddingGrad {
-        /// Градиент от последующих операций [*, embedding_dim].
+        /// Gradient from subsequent operations [*, embedding_dim].
         grad_output: NodeId,
-        /// Индексы, по которым производился lookup.
+        /// Indices used for the lookup.
         indices: NodeId,
-        /// Количество embeddings (размер словаря).
+        /// Number of embeddings (vocabulary size).
         num_embeddings: usize,
     },
 
-    // --- Операции трансформации ---
-    Reshape(NodeId, NodeId), // Второй аргумент - тензор с новой формой
-    Transpose(NodeId, usize, usize), // Оси для транспонирования
-    /// Транслирует (broadcasts) первый тензор (скаляр) до формы второго тензора.
-    /// Используется в основном в графе градиентов, например для grad(Sum).
+    // --- Transformation Operations ---
+    Reshape(NodeId, NodeId), // Second argument is tensor with new shape
+    Transpose(NodeId, usize, usize), // Axes to transpose
+    /// Broadcasts the first tensor (scalar) to the shape of the second tensor.
+    /// Used mainly in gradient graph, e.g., for grad(Sum).
     Broadcast(NodeId, NodeId),
-    /// Суммирует тензор `source` так, чтобы его форма совпала с формой тензора `target_shape_provider`.
-    /// Используется в autograd для градиентов от broadcast-операций.
+    /// Sums tensor `source` so that its shape matches the shape of `target_shape_provider`.
+    /// Used in autograd for gradients from broadcast operations.
     ReduceSumTo(NodeId, NodeId),
 
-    // --- Операции свертки (Convolution) ---
-    /// 2D Свертка (Convolution 2D).
-    /// Входной тензор формы [N, C_in, H, W], ядро формы [C_out, C_in, kH, kW].
+    // --- Convolution Operations ---
+    /// 2D Convolution.
+    /// Input tensor of shape [N, C_in, H, W], kernel of shape [C_out, C_in, kH, kW].
     Conv2d {
-        /// Входной тензор формы [N, C_in, H, W].
+        /// Input tensor of shape [N, C_in, H, W].
         input: NodeId,
-        /// Ядро свертки (weights) формы [C_out, C_in/groups, kH, kW].
+        /// Convolution kernel (weights) of shape [C_out, C_in/groups, kH, kW].
         weight: NodeId,
-        /// Опциональный bias формы [C_out].
+        /// Optional bias of shape [C_out].
         bias: Option<NodeId>,
-        /// Шаг свертки (stride_h, stride_w).
+        /// Stride (stride_h, stride_w).
         stride: (usize, usize),
-        /// Паддинг (pad_h, pad_w).
+        /// Padding (pad_h, pad_w).
         padding: (usize, usize),
-        /// Дилатация (dilation_h, dilation_w).
+        /// Dilation (dilation_h, dilation_w).
         dilation: (usize, usize),
-        /// Количество групп для grouped convolution.
+        /// Number of groups for grouped convolution.
         groups: usize,
     },
 
-    /// Транспонированная 2D свертка (Deconvolution).
+    /// Transposed 2D Convolution (Deconvolution).
     ConvTranspose2d {
         input: NodeId,
         weight: NodeId,
@@ -219,20 +217,20 @@ pub enum NodeType {
         groups: usize,
     },
 
-    // --- Операции пулинга (Pooling) ---
+    // --- Pooling Operations ---
     MaxPool2d {
-        /// Входной тензор, обычно формы [N, C, H, W].
+        /// Input tensor, typically of shape [N, C, H, W].
         input: NodeId,
-        /// Размер окна, например (2, 2).
+        /// Window size, e.g., (2, 2).
         kernel_size: (usize, usize),
-        /// Шаг окна, например (2, 2).
+        /// Window stride, e.g., (2, 2).
         stride: (usize, usize),
     },
 
     MaxUnpool2d {
-        /// Входной градиент (из вышестоящего слоя).
+        /// Input gradient (from upstream layer).
         input: NodeId,
-        /// Ссылка на ИСХОДНЫЙ вход MaxPool2d (нужен для определения формы выхода).
+        /// Reference to the ORIGINAL MaxPool2d input (needed to determine output shape).
         original_input: NodeId,
         kernel_size: (usize, usize),
         stride: (usize, usize),
@@ -258,66 +256,66 @@ pub enum NodeType {
         padding: (usize, usize),
     },
 
-    /// Adaptive Average Pooling 2D - автоматически вычисляет параметры
-    /// для достижения нужного выходного размера.
+    /// Adaptive Average Pooling 2D - automatically computes parameters
+    /// to achieve the desired output size.
     AdaptiveAvgPool2d {
         input: NodeId,
-        /// Целевой выходной размер (H_out, W_out).
+        /// Target output size (H_out, W_out).
         output_size: (usize, usize),
     },
 
-    /// Layer Normalization - нормализация по последним normalized_shape измерениям.
+    /// Layer Normalization - normalizes across the last normalized_shape dimensions.
     /// y = gamma * (x - mean) / sqrt(var + eps) + beta
     LayerNorm {
-        /// Входной тензор.
+        /// Input tensor.
         input: NodeId,
-        /// Обучаемый параметр масштабирования.
+        /// Trainable scale parameter.
         gamma: NodeId,
-        /// Обучаемый параметр сдвига.
+        /// Trainable shift parameter.
         beta: NodeId,
-        /// Малая константа для численной стабильности.
+        /// Small constant for numerical stability.
         eps: f32,
     },
 
-    /// Backward pass для LayerNorm по входу x.
-    /// Вычисляет корректный градиент с учетом всех зависимостей через mean и variance.
+    /// Backward pass for LayerNorm with respect to input x.
+    /// Computes the correct gradient considering all dependencies through mean and variance.
     LayerNormBackward {
-        /// Градиент от следующего слоя ∂L/∂y.
+        /// Gradient from the next layer ∂L/∂y.
         grad_output: NodeId,
-        /// Исходный вход x.
+        /// Original input x.
         input: NodeId,
-        /// Параметр gamma.
+        /// Gamma parameter.
         gamma: NodeId,
-        /// Epsilon для численной стабильности.
+        /// Epsilon for numerical stability.
         eps: f32,
     },
 
-    /// Градиент LayerNorm по параметру gamma.
+    /// Gradient of LayerNorm with respect to parameter gamma.
     /// grad_gamma = sum(grad_output * x_normalized, axis=batch)
     LayerNormGradGamma {
-        /// Градиент от следующего слоя ∂L/∂y.
+        /// Gradient from the next layer ∂L/∂y.
         grad_output: NodeId,
-        /// Исходный вход x.
+        /// Original input x.
         input: NodeId,
-        /// Epsilon для численной стабильности.
+        /// Epsilon for numerical stability.
         eps: f32,
     },
 
-    /// Градиент LayerNorm по параметру beta.
+    /// Gradient of LayerNorm with respect to parameter beta.
     /// grad_beta = sum(grad_output, axis=batch)
     LayerNormGradBeta {
-        /// Градиент от следующего слоя ∂L/∂y.
+        /// Gradient from the next layer ∂L/∂y.
         grad_output: NodeId,
     },
 
-    /// Градиент Conv2d по входу (input).
-    /// Реализуется как транспонированная свертка.
+    /// Gradient of Conv2d with respect to input.
+    /// Implemented as transposed convolution.
     Conv2dBackwardInput {
-        /// Градиент от следующего слоя (d_output) формы [N, C_out, H_out, W_out].
+        /// Gradient from next layer (d_output) of shape [N, C_out, H_out, W_out].
         grad_output: NodeId,
-        /// Веса свертки формы [C_out, C_in/groups, kH, kW].
+        /// Convolution weights of shape [C_out, C_in/groups, kH, kW].
         weight: NodeId,
-        /// Форма исходного входа [N, C_in, H_in, W_in].
+        /// Original input shape [N, C_in, H_in, W_in].
         input_shape: (usize, usize, usize, usize),
         stride: (usize, usize),
         padding: (usize, usize),
@@ -325,14 +323,14 @@ pub enum NodeType {
         groups: usize,
     },
 
-    /// Градиент Conv2d по весам (weight).
-    /// Реализуется как свертка входа с градиентом выхода.
+    /// Gradient of Conv2d with respect to weights.
+    /// Implemented as convolution of input with output gradient.
     Conv2dBackwardWeight {
-        /// Градиент от следующего слоя формы [N, C_out, H_out, W_out].
+        /// Gradient from next layer of shape [N, C_out, H_out, W_out].
         grad_output: NodeId,
-        /// Исходный вход формы [N, C_in, H_in, W_in].
+        /// Original input of shape [N, C_in, H_in, W_in].
         input: NodeId,
-        /// Форма весов [C_out, C_in/groups, kH, kW].
+        /// Weight shape [C_out, C_in/groups, kH, kW].
         weight_shape: (usize, usize, usize, usize),
         stride: (usize, usize),
         padding: (usize, usize),
@@ -340,57 +338,57 @@ pub enum NodeType {
         groups: usize,
     },
 
-    // --- Управляющие конструкции ---
-    /// Условное выполнение. Выполняет один из двух под-графов в зависимости
-    /// от условия.
+    // --- Control Flow Constructs ---
+    /// Conditional execution. Executes one of two sub-graphs depending
+    /// on the condition.
     If {
         condition: NodeId,
         then_asg: AsgId,
         else_asg: AsgId,
     },
-    /// Циклическое выполнение под-графа.
+    /// Loop execution of a sub-graph.
     ForLoop {
-        iterable: NodeId, // Узел, по которому итерируемся (например, тензор)
-        loop_body_asg: AsgId, // ID под-графа, который будет телом цикла
+        iterable: NodeId,      // Node to iterate over (e.g., tensor)
+        loop_body_asg: AsgId,  // ID of sub-graph that will be the loop body
     },
 
-    // --- Функции ---
-    /// Определение функции внутри графа.
+    // --- Functions ---
+    /// Function definition within the graph.
     FunctionDefinition {
         name: String,
         body_asg: AsgId,
     },
-    /// Вызов ранее определенной функции.
+    /// Call to a previously defined function.
     FunctionCall {
-        function_id: NodeId, // ID узла FunctionDefinition
+        function_id: NodeId, // ID of FunctionDefinition node
         args: Vec<NodeId>,
     },
 
-    // --- Ввод/Вывод и побочные эффекты ---
-    /// Печатает значение узла в стандартный вывод во время выполнения.
+    // --- I/O and Side Effects ---
+    /// Prints the value of a node to standard output during execution.
     Print(NodeId),
 }
 
-/// Структура, представляющая сам Абстрактный Семантический Граф.
+/// Structure representing the Abstract Semantic Graph itself.
 ///
-/// Содержит коллекцию всех узлов и определяет "интерфейс" графа —
-/// его входы и выходные узлы.
+/// Contains a collection of all nodes and defines the graph's "interface" —
+/// its inputs and output nodes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Asg {
-    /// Уникальный ID графа.
+    /// Unique ID of the graph.
     pub id: AsgId,
-    /// Необязательное имя для отладки.
+    /// Optional name for debugging.
     pub name: Option<String>,
-    /// Все узлы, принадлежащие этому графу, хранящиеся по их ID.
+    /// All nodes belonging to this graph, stored by their ID.
     pub nodes: HashMap<NodeId, Node>,
-    /// ID узлов, которые являются входами этого графа.
+    /// IDs of nodes that are inputs to this graph.
     pub inputs: Vec<NodeId>,
-    /// ID узлов, которые являются результатом вычисления всего графа.
+    /// IDs of nodes that are the result of computing the entire graph.
     pub outputs: Vec<NodeId>,
 }
 
 impl Asg {
-    /// Создает новый, пустой граф с заданным ID.
+    /// Creates a new, empty graph with the given ID.
     pub fn new(id: AsgId, name: Option<String>) -> Self {
         Self {
             id,
@@ -401,8 +399,8 @@ impl Asg {
         }
     }
 
-    /// Добавляет новый узел в граф.
-    /// На этом этапе информация о форме и типе данных отсутствует.
+    /// Adds a new node to the graph.
+    /// At this stage, shape and data type information is absent.
     pub fn add_node(&mut self, name: Option<String>, node_type: NodeType) -> NodeId {
         let new_id = self.nodes.len();
         let node = Node {
@@ -416,29 +414,29 @@ impl Asg {
         new_id
     }
 
-    /// Устанавливает входные узлы для графа.
+    /// Sets the input nodes for the graph.
     pub fn set_inputs(&mut self, inputs: Vec<NodeId>) {
         self.inputs = inputs;
     }
 
-    /// Устанавливает выходные узлы для графа.
+    /// Sets the output nodes for the graph.
     pub fn set_outputs(&mut self, outputs: Vec<NodeId>) {
         self.outputs = outputs;
     }
 
-    /// Вспомогательный метод для установки одного выходного узла.
+    /// Helper method for setting a single output node.
     pub fn set_output(&mut self, output: NodeId) {
         self.outputs = vec![output];
     }
 
-    /// Находит узел по его ID.
+    /// Finds a node by its ID.
     pub fn get_node(&self, id: NodeId) -> AsgResult<&Node> {
         self.nodes
             .get(&id)
             .ok_or(AsgError::NodeNotFound(id))
     }
 
-    /// Находит изменяемый узел по его ID.
+    /// Finds a mutable node by its ID.
     pub fn get_node_mut(&mut self, id: NodeId) -> AsgResult<&mut Node> {
         self.nodes
             .get_mut(&id)

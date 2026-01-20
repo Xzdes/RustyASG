@@ -1,10 +1,10 @@
-//! Модуль, содержащий строительные блоки для нейронных сетей.
+//! Module containing building blocks for neural networks.
 //!
-//! В графовой архитектуре, каждый "слой" является конструктором,
-//! который добавляет определенный паттерн узлов (операций и параметров)
-//! в Абстрактный Семантический Граф (ASG).
+//! In the graph-based architecture, each "layer" is a constructor
+//! that adds a specific pattern of nodes (operations and parameters)
+//! to the Abstract Semantic Graph (ASG).
 
-// Объявляем все субмодули
+// Declare all submodules
 pub mod activations;
 pub mod attention;
 pub mod batchnorm;
@@ -19,18 +19,18 @@ pub mod pooling;
 pub mod positional;
 pub mod transformer;
 
-// Ре-экспортируем структуры для удобства использования
+// Re-export structures for convenience
 
-// Активации
+// Activations
 pub use activations::{ELU, GELU, LeakyReLU, ReLU, SiLU, Sigmoid, Softmax, Softplus, Swish, Tanh};
 
-// Сверточные слои
+// Convolutional layers
 pub use conv::{Conv2d, Conv2dConfig, ConvTranspose2d};
 
-// Pooling слои
+// Pooling layers
 pub use pooling::{AdaptiveAvgPool2d, AvgPool2d, GlobalAvgPool2d, MaxPool2d};
 
-// Другие слои
+// Other layers
 pub use attention::{
     MultiHeadAttention, MultiHeadAttentionConfig, AttentionMask,
     create_causal_mask, create_padding_mask_from_ids,
@@ -47,5 +47,5 @@ pub use positional::{
 };
 pub use transformer::TransformerBlock;
 
-// Базовый трейт
+// Base trait
 pub use module::Module;

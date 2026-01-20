@@ -1,78 +1,78 @@
-//! Модуль, определяющий абстрактный интерфейс (трейт) для исполнительных бэкендов.
+//! Module defining the abstract interface (trait) for execution backends.
 
 use crate::asg::{Asg, AsgId, NodeId, Value};
 use std::collections::HashMap;
 use thiserror::Error;
 
-/// Ошибки, которые могут возникнуть во время выполнения (интерпретации) графа.
-/// Этот тип ошибок является общим для всех бэкендов.
+/// Errors that can occur during graph execution (interpretation).
+/// This error type is common to all backends.
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum RuntimeError {
-    #[error("Узел с ID {0} не найден в графе {1}. Проверьте, что граф был корректно построен и все узлы существуют.")]
+    #[error("Node with ID {0} not found in graph {1}. Verify that the graph was built correctly and all nodes exist.")]
     NodeNotFound(NodeId, AsgId),
 
-    #[error("Граф с ID {0} не найден в контексте выполнения. Убедитесь, что граф был зарегистрирован перед выполнением.")]
+    #[error("Graph with ID {0} not found in execution context. Ensure the graph was registered before execution.")]
     GraphNotFound(AsgId),
 
-    #[error("Несоответствие типов: операция ожидала {expected}, но получила {actual}. Проверьте типы входных данных.")]
+    #[error("Type mismatch: operation expected {expected}, but got {actual}. Check input data types.")]
     TypeError { expected: String, actual: String },
 
-    #[error("Ошибка формы тензора: {0}. Проверьте размерности входных тензоров.")]
+    #[error("Tensor shape error: {0}. Check input tensor dimensions.")]
     ShapeError(String),
 
-    #[error("Отсутствует значение для входа '{0}' (узел ID: {1}). Добавьте это значение в initial_data при вызове backend.run().")]
+    #[error("Missing value for input '{0}' (node ID: {1}). Add this value to initial_data when calling backend.run().")]
     MissingInput(String, NodeId),
 
-    #[error("Отсутствует значение для параметра '{0}' (узел ID: {1}). Инициализируйте параметр перед выполнением графа.")]
+    #[error("Missing value for parameter '{0}' (node ID: {1}). Initialize the parameter before executing the graph.")]
     MissingParameter(String, NodeId),
 
-    #[error("Операция '{0}' не реализована в текущем бэкенде. Рассмотрите использование альтернативной операции или реализуйте поддержку.")]
+    #[error("Operation '{0}' is not implemented in current backend. Consider using an alternative operation or implement support.")]
     UnimplementedOperation(String),
 
-    #[error("Ошибка вычисления: {0}")]
+    #[error("Computation error: {0}")]
     ComputationError(String),
 
-    #[error("Ошибка памяти: {0}")]
+    #[error("Memory error: {0}")]
     MemoryError(String),
 }
 
-/// Кэш для хранения уже вычисленных значений узлов.
-/// Ключ - это (AsgId, NodeId).
+/// Cache for storing already computed node values.
+/// Key is (AsgId, NodeId).
 pub type Memo<T> = HashMap<(AsgId, NodeId), T>;
 
-/// Трейт, определяющий общий интерфейс для исполнительной среды (бэкенда).
+/// Trait defining the common interface for execution environments (backends).
 ///
-/// Любая структура, реализующая этот трейт, может взять ASG и данные
-/// и выполнить вычисления, возвращая результат.
+/// Any struct implementing this trait can take an ASG and data
+/// and perform computations, returning the result.
 pub trait Backend {
-    /// Тип, представляющий данные, специфичные для устройства (CPU или GPU).
-    /// Например, для GPU это может быть обертка над wgpu::Buffer.
+    /// Type representing device-specific data (CPU or GPU).
+    /// For example, for GPU this could be a wrapper over wgpu::Buffer.
     type DeviceData: std::fmt::Debug;
 
-    /// Подготавливает данные для выполнения: выделяет память на устройстве
-    /// и копирует в нее данные с CPU.
+    /// Prepares data for execution: allocates memory on the device
+    /// and copies data from CPU.
     fn load_data(
         &self,
         data: &HashMap<String, Value>,
     ) -> Result<HashMap<String, Self::DeviceData>, RuntimeError>;
 
-    /// Выполняет граф, используя и обновляя кэш вычислений.
+    /// Executes the graph, using and updating the computation cache.
     ///
-    /// # Аргументы
-    /// * `main_asg` - Основной граф для выполнения.
-    /// * `initial_memo` - Кэш с начальными данными (входы, параметры) и, возможно,
-    ///   результатами предыдущих вычислений (для связанных графов).
+    /// # Arguments
+    /// * `main_asg` - The main graph to execute.
+    /// * `initial_memo` - Cache with initial data (inputs, parameters) and possibly
+    ///   results from previous computations (for linked graphs).
     ///
-    /// # Возвращает
-    /// Кортеж, содержащий:
-    /// 1. Вектор с выходными данными графа.
-    /// 2. Финальное состояние кэша `Memo` со всеми промежуточными результатами.
+    /// # Returns
+    /// A tuple containing:
+    /// 1. Vector with the graph's output data.
+    /// 2. Final state of the `Memo` cache with all intermediate results.
     fn run(
         &self,
         main_asg: &Asg,
         initial_memo: Memo<Self::DeviceData>,
     ) -> Result<(Vec<Self::DeviceData>, Memo<Self::DeviceData>), RuntimeError>;
 
-    /// Забирает результат с устройства обратно в виде CPU-значения (`Value`).
+    /// Retrieves results from the device back as CPU values (`Value`).
     fn retrieve_data(&self, device_data: &[Self::DeviceData]) -> Result<Vec<Value>, RuntimeError>;
 }

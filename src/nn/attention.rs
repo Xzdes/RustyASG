@@ -1,7 +1,7 @@
-//! Модуль, реализующий многоголовое внимание (Multi-Head Attention)
-//! с поддержкой масок (causal, padding) для графовой архитектуры.
+//! Module implementing Multi-Head Attention
+//! with mask support (causal, padding) for graph architecture.
 //!
-//! # Пример использования
+//! # Usage Example
 //!
 //! ```rust,ignore
 //! use rustyasg::nn::{MultiHeadAttention, Module};
@@ -13,7 +13,7 @@
 //! let input = Tensor::new_input(&context, "input"); // [batch, seq_len, 512]
 //! let output = mha.forward(&input); // Self-attention
 //!
-//! // С causal маской (для декодера)
+//! // With causal mask (for decoder)
 //! let output = mha.forward_with_mask(&input, &input, &input, Some(&causal_mask), None);
 //! ```
 
@@ -24,30 +24,30 @@ use ndarray::{arr0, ArrayD, IxDyn};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Тип маски внимания.
+/// Attention mask type.
 #[derive(Debug, Clone)]
 pub enum AttentionMask {
-    /// Causal маска - запрещает attention к будущим позициям.
-    /// Автоматически создаётся на основе seq_len.
+    /// Causal mask - prevents attention to future positions.
+    /// Automatically created based on seq_len.
     Causal,
-    /// Padding маска - указывает какие позиции являются padding.
-    /// Tensor формы [batch_size, seq_len], где 0 = padding, 1 = valid.
+    /// Padding mask - indicates which positions are padding.
+    /// Tensor of shape [batch_size, seq_len], where 0 = padding, 1 = valid.
     Padding(Tensor),
-    /// Произвольная маска, переданная напрямую.
-    /// Tensor формы [batch_size, 1, seq_len, seq_len] или [1, 1, seq_len, seq_len].
+    /// Arbitrary mask, passed directly.
+    /// Tensor of shape [batch_size, 1, seq_len, seq_len] or [1, 1, seq_len, seq_len].
     Custom(Tensor),
 }
 
-/// Конфигурация Multi-Head Attention.
+/// Multi-Head Attention configuration.
 #[derive(Debug, Clone)]
 pub struct MultiHeadAttentionConfig {
-    /// Размерность embedding'а.
+    /// Embedding dimension.
     pub embed_dim: usize,
-    /// Количество голов внимания.
+    /// Number of attention heads.
     pub num_heads: usize,
-    /// Dropout вероятность (пока не используется).
+    /// Dropout probability (not used yet).
     pub dropout: f32,
-    /// Использовать ли bias в проекциях.
+    /// Whether to use bias in projections.
     pub bias: bool,
 }
 
@@ -63,7 +63,7 @@ impl Default for MultiHeadAttentionConfig {
 }
 
 impl MultiHeadAttentionConfig {
-    /// Создаёт конфигурацию с указанными параметрами.
+    /// Creates configuration with specified parameters.
     pub fn new(embed_dim: usize, num_heads: usize) -> Self {
         Self {
             embed_dim,
@@ -72,27 +72,27 @@ impl MultiHeadAttentionConfig {
         }
     }
 
-    /// Устанавливает dropout.
+    /// Sets dropout.
     pub fn with_dropout(mut self, dropout: f32) -> Self {
         self.dropout = dropout;
         self
     }
 
-    /// Отключает bias в проекциях.
+    /// Disables bias in projections.
     pub fn without_bias(mut self) -> Self {
         self.bias = false;
         self
     }
 }
 
-/// Реализация многоголового внимания (Multi-Head Attention).
+/// Multi-Head Attention implementation.
 ///
-/// Поддерживает:
+/// Supports:
 /// - Self-attention (Q = K = V)
 /// - Cross-attention (Q != K = V)
-/// - Causal маски (для декодеров)
-/// - Padding маски
-/// - Произвольные маски внимания
+/// - Causal masks (for decoders)
+/// - Padding masks
+/// - Arbitrary attention masks
 pub struct MultiHeadAttention {
     num_heads: usize,
     head_dim: usize,
@@ -106,7 +106,7 @@ pub struct MultiHeadAttention {
 }
 
 impl MultiHeadAttention {
-    /// Создает новый слой MultiHeadAttention.
+    /// Creates a new MultiHeadAttention layer.
     pub fn new(
         context: &Rc<RefCell<GraphContext>>,
         embed_dim: usize,
@@ -115,7 +115,7 @@ impl MultiHeadAttention {
     ) -> Self {
         assert!(
             embed_dim % num_heads == 0,
-            "embed_dim ({}) должен делиться на num_heads ({}) без остатка.",
+            "embed_dim ({}) must be divisible by num_heads ({}) without remainder.",
             embed_dim,
             num_heads
         );
@@ -140,7 +140,7 @@ impl MultiHeadAttention {
         }
     }
 
-    /// Создаёт MultiHeadAttention из конфигурации.
+    /// Creates MultiHeadAttention from configuration.
     pub fn from_config(
         context: &Rc<RefCell<GraphContext>>,
         config: MultiHeadAttentionConfig,
@@ -180,14 +180,14 @@ impl MultiHeadAttention {
 
         // Apply mask (if provided)
         let scores_masked = if let Some(m) = mask {
-            // Mask: 0 для валидных позиций, -inf для masked позиций
+            // Mask: 0 for valid positions, -inf for masked positions
             // scores + mask
             &scores_scaled + m
         } else {
             scores_scaled
         };
 
-        // Softmax по последней размерности (seq_k)
+        // Softmax along last dimension (seq_k)
         let attention_weights = scores_masked.softmax();
 
         // Apply attention to values: [batch, num_heads, seq_q, seq_k] @ [batch, num_heads, seq_k, head_dim]
@@ -195,7 +195,7 @@ impl MultiHeadAttention {
         attention_weights.dot(value)
     }
 
-    /// Forward pass с явным указанием Q, K, V и масок.
+    /// Forward pass with explicit Q, K, V and masks.
     ///
     /// # Arguments
     /// * `query` - Query tensor [batch, seq_q, embed_dim]
@@ -217,7 +217,7 @@ impl MultiHeadAttention {
         let v = self.w_v.forward(value);
 
         // Reshape to [batch, seq, num_heads, head_dim] then transpose to [batch, num_heads, seq, head_dim]
-        // Для упрощения предполагаем, что batch_size и seq_len известны через форму
+        // For simplicity assuming batch_size and seq_len are known through shape
         let q_heads = self.split_heads_dynamic(&q);
         let k_heads = self.split_heads_dynamic(&k);
         let v_heads = self.split_heads_dynamic(&v);
@@ -240,17 +240,17 @@ impl MultiHeadAttention {
         self.w_o.forward(&concatenated)
     }
 
-    /// Вспомогательная функция для разделения тензора на головы (динамическая версия).
+    /// Helper function to split tensor into heads (dynamic version).
     fn split_heads_dynamic(&self, x: &Tensor) -> Tensor {
         // [batch, seq, embed_dim] -> [batch, seq, num_heads, head_dim]
         // -> [batch, num_heads, seq, head_dim]
-        // Используем reshape с -1 для автоматического вывода размерности
-        // Пока используем упрощённый reshape для единственного batch
+        // Using reshape with -1 for automatic dimension inference
+        // For now using simplified reshape for single batch
         x.reshape(vec![-1, -1, self.num_heads as i64, self.head_dim as i64])
             .transpose(1, 2)
     }
 
-    /// Вспомогательная функция для слияния голов (динамическая версия).
+    /// Helper function to merge heads (dynamic version).
     fn combine_heads_dynamic(&self, x: &Tensor) -> Tensor {
         // [batch, num_heads, seq, head_dim] -> [batch, seq, num_heads, head_dim]
         // -> [batch, seq, embed_dim]
@@ -258,7 +258,7 @@ impl MultiHeadAttention {
             .reshape(vec![-1, -1, self.embed_dim as i64])
     }
 
-    /// Комбинирует attention маску и key padding маску.
+    /// Combines attention mask and key padding mask.
     fn combine_masks(
         &self,
         attn_mask: Option<&Tensor>,
@@ -268,19 +268,19 @@ impl MultiHeadAttention {
             (None, None) => None,
             (Some(m), None) => Some(m.clone()),
             (None, Some(kpm)) => {
-                // Преобразуем key_padding_mask [batch, seq_k] в [batch, 1, 1, seq_k]
-                // и конвертируем: 0 (valid) -> 0.0, 1 (padding) -> -inf
+                // Convert key_padding_mask [batch, seq_k] to [batch, 1, 1, seq_k]
+                // and convert: 0 (valid) -> 0.0, 1 (padding) -> -inf
                 Some(self.expand_padding_mask(kpm))
             }
             (Some(am), Some(kpm)) => {
-                // Комбинируем обе маски
+                // Combine both masks
                 let expanded_kpm = self.expand_padding_mask(kpm);
                 Some(&am.clone() + &expanded_kpm)
             }
         }
     }
 
-    /// Расширяет padding маску до формы attention scores.
+    /// Expands padding mask to attention scores shape.
     fn expand_padding_mask(&self, mask: &Tensor) -> Tensor {
         // mask: [batch, seq_k], value 0 = padding, 1 = valid
         // output: [batch, 1, 1, seq_k], value 0 for valid, -inf for padding
@@ -291,13 +291,13 @@ impl MultiHeadAttention {
         &inverted * &neg_inf
     }
 
-    /// Создаёт causal маску (upper triangular with -inf).
+    /// Creates causal mask (upper triangular with -inf).
     ///
     /// # Arguments
-    /// * `seq_len` - Длина последовательности
+    /// * `seq_len` - Sequence length
     ///
     /// # Returns
-    /// Tensor формы [1, 1, seq_len, seq_len]
+    /// Tensor of shape [1, 1, seq_len, seq_len]
     pub fn create_causal_mask(&self, seq_len: usize) -> Tensor {
         let mut mask_data = vec![0.0f32; seq_len * seq_len];
         for i in 0..seq_len {
@@ -311,14 +311,14 @@ impl MultiHeadAttention {
         Tensor::new_literal(&self.context, mask_arr, "causal_mask")
     }
 
-    /// Создаёт padding маску из длин последовательностей.
+    /// Creates padding mask from sequence lengths.
     ///
     /// # Arguments
-    /// * `lengths` - Вектор длин для каждого элемента батча
-    /// * `max_len` - Максимальная длина (размер seq dimension)
+    /// * `lengths` - Vector of lengths for each batch element
+    /// * `max_len` - Maximum length (seq dimension size)
     ///
     /// # Returns
-    /// Tensor формы [batch_size, max_len], где 1 = valid, 0 = padding
+    /// Tensor of shape [batch_size, max_len], where 1 = valid, 0 = padding
     pub fn create_padding_mask_from_lengths(&self, lengths: &[usize], max_len: usize) -> Tensor {
         let batch_size = lengths.len();
         let mut mask_data = vec![0.0f32; batch_size * max_len];
@@ -333,7 +333,7 @@ impl MultiHeadAttention {
 
     // Legacy methods for backward compatibility
 
-    /// Вспомогательная функция для разделения тензора на головы.
+    /// Helper function to split tensor into heads.
     fn split_heads(&self, x: &Tensor) -> Tensor {
         x.reshape(vec![
             1,
@@ -344,7 +344,7 @@ impl MultiHeadAttention {
         .transpose(1, 2)
     }
 
-    /// Вспомогательная функция для слияния голов.
+    /// Helper function to merge heads.
     fn combine_heads(&self, x: &Tensor) -> Tensor {
         x.transpose(1, 2).reshape(vec![
             1,
@@ -392,14 +392,14 @@ impl Module for MultiHeadAttention {
     }
 }
 
-/// Создаёт causal маску для decoder self-attention.
+/// Creates causal mask for decoder self-attention.
 ///
 /// # Arguments
-/// * `context` - Контекст графа
-/// * `seq_len` - Длина последовательности
+/// * `context` - Graph context
+/// * `seq_len` - Sequence length
 ///
 /// # Returns
-/// Tensor формы [1, 1, seq_len, seq_len] с 0 для валидных позиций и -1e9 для masked.
+/// Tensor of shape [1, 1, seq_len, seq_len] with 0 for valid positions and -1e9 for masked.
 pub fn create_causal_mask(context: &Rc<RefCell<GraphContext>>, seq_len: usize) -> Tensor {
     let mut mask_data = vec![0.0f32; seq_len * seq_len];
     for i in 0..seq_len {
@@ -413,15 +413,15 @@ pub fn create_causal_mask(context: &Rc<RefCell<GraphContext>>, seq_len: usize) -
     Tensor::new_literal(context, mask_arr, "causal_mask")
 }
 
-/// Создаёт padding маску из тензора ключей.
+/// Creates padding mask from key tensor.
 ///
 /// # Arguments
-/// * `context` - Контекст графа
-/// * `padding_idx` - Индекс padding токена
-/// * `key_ids` - Tensor индексов токенов [batch, seq_len]
+/// * `context` - Graph context
+/// * `padding_idx` - Padding token index
+/// * `key_ids` - Tensor of token indices [batch, seq_len]
 ///
 /// # Returns
-/// Tensor маски [batch, 1, 1, seq_len] с 0 для валидных и -1e9 для padding.
+/// Mask tensor [batch, 1, 1, seq_len] with 0 for valid and -1e9 for padding.
 pub fn create_padding_mask_from_ids(
     context: &Rc<RefCell<GraphContext>>,
     lengths: &[usize],
@@ -457,19 +457,19 @@ mod tests {
         let context = Rc::new(RefCell::new(GraphContext::new()));
         let mask = create_causal_mask(&context, 4);
 
-        // Маска должна быть создана
-        // Проверяем через получение литерала
+        // Mask should be created
+        // Check by getting the literal
         let graph = context.borrow();
         let main_graph = graph.main_graph();
         let node = main_graph.get_node(mask.node_id).unwrap();
 
         if let NodeType::Literal(Value::Tensor(arr)) = &node.node_type {
             assert_eq!(arr.shape(), &[1, 1, 4, 4]);
-            // Проверяем, что верхний треугольник -1e9
+            // Check that upper triangle is -1e9
             assert!(arr[[0, 0, 0, 1]] < -1e8);
             assert!(arr[[0, 0, 0, 2]] < -1e8);
             assert!(arr[[0, 0, 0, 3]] < -1e8);
-            // Диагональ и ниже = 0
+            // Diagonal and below = 0
             assert_eq!(arr[[0, 0, 0, 0]], 0.0);
             assert_eq!(arr[[0, 0, 1, 0]], 0.0);
             assert_eq!(arr[[0, 0, 1, 1]], 0.0);

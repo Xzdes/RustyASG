@@ -1,24 +1,24 @@
-//! Модуль, реализующий бэкенд для выполнения ASG на CPU.
+//! Module implementing backend for executing ASG on CPU.
 //!
-//! Этот бэкенд обходит граф вычислений (ASG) и для каждого узла
-//! выполняет соответствующую операцию с помощью `ndarray`.
+//! This backend traverses the computation graph (ASG) and for each node
+//! executes the corresponding operation using `ndarray`.
 
 use super::backend::{Backend, Memo, RuntimeError};
 use crate::asg::{Asg, AsgId, NodeId, NodeType, Value};
 use ndarray::{s, Array4, Axis, Ix2, Zip};
 use std::collections::HashMap;
 
-/// Контекст выполнения для одного или нескольких связанных графов на CPU.
+/// Execution context for one or more related graphs on CPU.
 struct ExecutionContext<'a> {
-    /// Хранилище всех графов, участвующих в вычислении.
+    /// Storage for all graphs participating in computation.
     graphs: HashMap<AsgId, &'a Asg>,
-    /// Глобальный кэш для уже вычисленных значений узлов.
-    /// Ключ - это (AsgId, NodeId).
+    /// Global cache for already computed node values.
+    /// Key is (AsgId, NodeId).
     memo: Memo<Value>,
 }
 
 impl<'a> ExecutionContext<'a> {
-    /// Создает новый контекст выполнения.
+    /// Creates a new execution context.
     fn new(main_asg: &'a Asg, initial_memo: Memo<Value>) -> Self {
         let mut graphs = HashMap::new();
         graphs.insert(main_asg.id, main_asg);
@@ -28,7 +28,7 @@ impl<'a> ExecutionContext<'a> {
         }
     }
 
-    /// Главная функция, которая рекурсивно вычисляет значение для заданного узла.
+    /// Main function that recursively computes value for given node.
     fn evaluate_node(&mut self, asg_id: AsgId, node_id: NodeId) -> Result<Value, RuntimeError> {
         if let Some(value) = self.memo.get(&(asg_id, node_id)) {
             return Ok(value.clone());
@@ -101,7 +101,7 @@ impl<'a> ExecutionContext<'a> {
                 }
             }
 
-            // Операции с параметрами
+            // Operations with parameters
             NodeType::LeakyReLU(op, slope) => {
                 let operand = self.evaluate_node(asg_id, *op)?;
                 op_leaky_relu(operand, *slope)
@@ -118,7 +118,7 @@ impl<'a> ExecutionContext<'a> {
                 let operand = self.evaluate_node(asg_id, *op)?;
                 op_clamp(operand, *min_val, *max_val)
             }
-            
+
             NodeType::Transpose(op, ax1, ax2) => {
                 let operand = self.evaluate_node(asg_id, *op)?;
                 op_transpose(operand, *ax1, *ax2)
@@ -263,7 +263,7 @@ impl Backend for CpuBackend {
         for node_id in sorted_nodes {
             context.evaluate_node(main_asg.id, node_id)?;
         }
-        
+
         let mut results = Vec::new();
         for output_node_id in &main_asg.outputs {
             let result = context.memo.get(&(main_asg.id, *output_node_id))
@@ -294,7 +294,7 @@ fn op_log(operand: Value) -> Result<Value, RuntimeError> { match operand { Value
 fn op_tanh(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.tanh()))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
 
 fn op_gelu(operand: Value) -> Result<Value, RuntimeError> {
-    // GELU(x) ≈ 0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
+    // GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
     const SQRT_2_OVER_PI: f32 = 0.7978845608028654;
     match operand {
         Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| {
@@ -329,7 +329,7 @@ fn op_elu(operand: Value, alpha: f32) -> Result<Value, RuntimeError> {
 
 fn op_softplus(operand: Value, beta: f32) -> Result<Value, RuntimeError> {
     // Softplus(x) = log(1 + exp(beta*x)) / beta
-    // Для численной стабильности: if beta*x > 20, return x
+    // For numerical stability: if beta*x > 20, return x
     match operand {
         Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| {
             let bx = beta * x;
@@ -346,25 +346,25 @@ fn op_clamp(operand: Value, min_val: f32, max_val: f32) -> Result<Value, Runtime
     }
 }
 
-fn op_mean(operand: Value) -> Result<Value, RuntimeError> { 
-    match operand { 
+fn op_mean(operand: Value) -> Result<Value, RuntimeError> {
+    match operand {
         Value::Tensor(a) => {
             let axis = Axis(a.ndim() - 1);
             let mean = a.mean_axis(axis).unwrap();
             Ok(Value::Tensor(mean.insert_axis(axis).into_dyn()))
-        }, 
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) 
-    } 
+        },
+        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+    }
 }
-fn op_variance(operand: Value) -> Result<Value, RuntimeError> { 
-    match operand { 
+fn op_variance(operand: Value) -> Result<Value, RuntimeError> {
+    match operand {
         Value::Tensor(a) => {
             let axis = Axis(a.ndim() - 1);
             let var = a.var_axis(axis, 0.0);
             Ok(Value::Tensor(var.insert_axis(axis).into_dyn()))
-        }, 
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) 
-    } 
+        },
+        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+    }
 }
 fn op_power(base: Value, power: Value) -> Result<Value, RuntimeError> { match (base, power) { (Value::Tensor(a), Value::Tensor(b)) if b.ndim() == 0 => Ok(Value::Tensor(a.mapv(|val| val.powf(*b.first().unwrap())))), _ => Err(RuntimeError::TypeError { expected: "Tensor and Scalar Tensor".to_string(), actual: "Other".to_string() }) } }
 fn op_transpose(operand: Value, axis1: usize, axis2: usize) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => { let mut axes: Vec<_> = (0..a.ndim()).collect(); axes.swap(axis1, axis2); Ok(Value::Tensor(a.permuted_axes(axes))) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
@@ -372,12 +372,12 @@ fn op_broadcast(source: Value, target: Value) -> Result<Value, RuntimeError> {
     match (source, target) {
         (Value::Tensor(s), Value::Tensor(t)) => {
             let target_shape = t.shape();
-            // Если source - скаляр, заполняем target_shape этим значением
+            // If source is scalar, fill target_shape with that value
             if s.ndim() == 0 || s.len() == 1 {
                 let val = *s.first().unwrap();
                 Ok(Value::Tensor(ndarray::ArrayD::from_elem(target_shape, val)))
             } else {
-                // Используем ndarray broadcasting
+                // Use ndarray broadcasting
                 let broadcasted = s.broadcast(target_shape)
                     .ok_or_else(|| RuntimeError::ShapeError(
                         format!("Cannot broadcast {:?} to {:?}", s.shape(), target_shape)
@@ -462,14 +462,14 @@ fn op_reduce_sum_to(source: Value, target_shape_provider: Value) -> Result<Value
 
     let source_rank = source_tensor.ndim();
     let target_rank = target_shape.len();
-    
+
     if source_rank > target_rank {
         let rank_diff = source_rank - target_rank;
         for _ in 0..rank_diff {
             source_tensor = source_tensor.sum_axis(Axis(0));
         }
     }
-    
+
     let mut axes_to_sum = Vec::new();
     let current_shape = source_tensor.shape();
     let rank_diff = current_shape.len() - target_rank;
@@ -478,12 +478,12 @@ fn op_reduce_sum_to(source: Value, target_shape_provider: Value) -> Result<Value
             axes_to_sum.push(i + rank_diff);
         }
     }
-    
+
     for &axis in axes_to_sum.iter().rev() {
         source_tensor = source_tensor.sum_axis(Axis(axis));
     }
-    
-    // ИСПРАВЛЕНО: Заменяем .into_shape() на .to_shape()?.to_owned()
+
+    // FIXED: Replaced .into_shape() with .to_shape()?.to_owned()
     source_tensor
         .to_shape(target_shape)
         .map_err(|e| RuntimeError::ShapeError(e.to_string()))
@@ -838,7 +838,7 @@ fn op_embedding(indices: Value, weight: Value) -> Result<Value, RuntimeError> {
         }),
     };
 
-    // Weight должен быть 2D: [num_embeddings, embedding_dim]
+    // Weight must be 2D: [num_embeddings, embedding_dim]
     if weight_arr.ndim() != 2 {
         return Err(RuntimeError::ShapeError(format!(
             "Embedding weight must be 2D, got {}D", weight_arr.ndim()
@@ -848,16 +848,16 @@ fn op_embedding(indices: Value, weight: Value) -> Result<Value, RuntimeError> {
     let num_embeddings = weight_arr.shape()[0];
     let embedding_dim = weight_arr.shape()[1];
 
-    // Вычисляем форму выхода: indices.shape + [embedding_dim]
+    // Calculate output shape: indices.shape + [embedding_dim]
     let indices_shape = indices_arr.shape();
     let mut output_shape: Vec<usize> = indices_shape.to_vec();
     output_shape.push(embedding_dim);
 
-    // Создаем выходной тензор
+    // Create output tensor
     let total_indices = indices_arr.len();
     let mut output_data = vec![0.0f32; total_indices * embedding_dim];
 
-    // Извлекаем embedding'и для каждого индекса
+    // Extract embeddings for each index
     for (i, &idx_f32) in indices_arr.iter().enumerate() {
         let idx = idx_f32 as usize;
         if idx >= num_embeddings {
@@ -866,7 +866,7 @@ fn op_embedding(indices: Value, weight: Value) -> Result<Value, RuntimeError> {
             )));
         }
 
-        // Копируем вектор embedding'а в выходной массив
+        // Copy embedding vector to output array
         for j in 0..embedding_dim {
             output_data[i * embedding_dim + j] = weight_arr[[idx, j]];
         }
@@ -976,14 +976,14 @@ fn op_embedding_grad(
 
     // grad_output shape: [*, embedding_dim]
     // indices shape: [*]
-    // Последняя размерность grad_output - это embedding_dim
+    // Last dimension of grad_output is embedding_dim
     let grad_shape = grad_arr.shape();
     let embedding_dim = *grad_shape.last().unwrap();
 
-    // Создаем выходной тензор [num_embeddings, embedding_dim]
+    // Create output tensor [num_embeddings, embedding_dim]
     let mut output = ndarray::ArrayD::zeros(ndarray::IxDyn(&[num_embeddings, embedding_dim]));
 
-    // Scatter-add: для каждого индекса добавляем соответствующий градиент
+    // Scatter-add: for each index add corresponding gradient
     let total_indices = indices_arr.len();
 
     for i in 0..total_indices {
@@ -994,7 +994,7 @@ fn op_embedding_grad(
             )));
         }
 
-        // Добавляем градиент для этого индекса
+        // Add gradient for this index
         for j in 0..embedding_dim {
             output[[idx, j]] += grad_arr.as_slice().unwrap()[i * embedding_dim + j];
         }
@@ -1172,7 +1172,7 @@ fn op_conv2d_backward_weight(
 }
 
 /// Layer Normalization: y = gamma * (x - mean) / sqrt(var + eps) + beta
-/// Нормализация происходит по последней оси.
+/// Normalization happens along the last axis.
 fn op_layer_norm(
     input: Value,
     gamma: Value,
@@ -1233,16 +1233,16 @@ fn op_layer_norm(
     Ok(Value::Tensor(output))
 }
 
-/// Backward pass для LayerNorm по входу x.
+/// Backward pass for LayerNorm with respect to input x.
 ///
-/// Формула градиента:
-/// dx = (1/σ) * (dy * γ - mean(dy * γ) - x_norm * mean(dy * γ * x_norm))
+/// Gradient formula:
+/// dx = (1/sigma) * (dy * gamma - mean(dy * gamma) - x_norm * mean(dy * gamma * x_norm))
 ///
-/// где:
+/// where:
 /// - dy = grad_output
-/// - γ = gamma
-/// - x_norm = (x - mean) / σ
-/// - σ = sqrt(var + eps)
+/// - gamma = gamma
+/// - x_norm = (x - mean) / sigma
+/// - sigma = sqrt(var + eps)
 fn op_layer_norm_backward(
     grad_output: Value,
     input: Value,
@@ -1264,7 +1264,7 @@ fn op_layer_norm_backward(
 
     let shape = x.shape();
     let ndim = shape.len();
-    let n = shape[ndim - 1] as f32;  // размер нормализации
+    let n = shape[ndim - 1] as f32;  // normalization size
     let batch_size: usize = shape.iter().take(ndim - 1).product();
 
     // Reshape to [batch, norm_size]
@@ -1321,9 +1321,9 @@ fn op_layer_norm_backward(
     Ok(Value::Tensor(dx))
 }
 
-/// Градиент LayerNorm по параметру gamma.
+/// LayerNorm gradient with respect to gamma parameter.
 /// grad_gamma = sum(grad_output * x_normalized, axis=batch)
-/// Выход имеет форму [1, norm_size] (такую же как gamma).
+/// Output has shape [1, norm_size] (same as gamma).
 fn op_layer_norm_grad_gamma(
     grad_output: Value,
     input: Value,
@@ -1378,9 +1378,9 @@ fn op_layer_norm_grad_gamma(
     Ok(Value::Tensor(output))
 }
 
-/// Градиент LayerNorm по параметру beta.
+/// LayerNorm gradient with respect to beta parameter.
 /// grad_beta = sum(grad_output, axis=batch)
-/// Выход имеет форму [1, norm_size] (такую же как beta).
+/// Output has shape [1, norm_size] (same as beta).
 fn op_layer_norm_grad_beta(
     grad_output: Value,
 ) -> Result<Value, RuntimeError> {

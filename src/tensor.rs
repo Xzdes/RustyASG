@@ -1,14 +1,14 @@
-//! Модуль, определяющий `Tensor` и `GraphContext`.
+//! Module defining `Tensor` and `GraphContext`.
 //!
-//! В новой архитектуре `Tensor` больше не является контейнером для данных.
-//! Вместо этого, это легковесный "дескриптор" (handle) или "символьная переменная",
-//! которая представляет узел в `Абстрактном Семантическом Графе` (ASG).
+//! In the new architecture, `Tensor` is no longer a data container.
+//! Instead, it is a lightweight "handle" or "symbolic variable"
+//! that represents a node in the `Abstract Semantic Graph` (ASG).
 //!
-//! Все операции над тензорами (`add`, `dot` и т.д.) не выполняют вычисления
-//! немедленно, а добавляют соответствующие узлы в граф.
+//! All tensor operations (`add`, `dot`, etc.) do not perform computations
+//! immediately, but add corresponding nodes to the graph.
 //!
-//! `GraphContext` - это центральный объект, который владеет и управляет
-//! построением ASG.
+//! `GraphContext` is the central object that owns and manages
+//! ASG construction.
 
 use crate::asg::{Asg, NodeId, NodeType, Value};
 use ndarray::ArrayD;
@@ -16,31 +16,31 @@ use std::cell::RefCell;
 use std::ops::{Add, Div, Mul, Sub};
 use std::rc::Rc;
 
-/// Контекст, который владеет и управляет построением одного или нескольких ASG.
+/// Context that owns and manages construction of one or more ASGs.
 ///
-/// Этот объект обернут в `Rc<RefCell<>>`, чтобы его можно было безопасно
-/// разделять между множеством `Tensor` дескрипторов.
+/// This object is wrapped in `Rc<RefCell<>>` so it can be safely
+/// shared between multiple `Tensor` handles.
 #[derive(Debug, Clone)]
 pub struct GraphContext {
-    // Пока что для простоты работаем с одним главным графом.
-    // В будущем здесь может быть коллекция графов для поддержки вложенности.
+    // For simplicity, we currently work with a single main graph.
+    // In the future, this may be a collection of graphs to support nesting.
     main_graph: Asg,
 }
 
 impl GraphContext {
-    /// Создает новый, пустой контекст графа.
+    /// Creates a new, empty graph context.
     pub fn new() -> Self {
         Self {
             main_graph: Asg::new(0, Some("main".to_string())),
         }
     }
 
-    /// Получает изменяемую ссылку на основной граф для его построения.
+    /// Gets a mutable reference to the main graph for construction.
     pub fn main_graph_mut(&mut self) -> &mut Asg {
         &mut self.main_graph
     }
 
-    /// Получает иммутабельную ссылку на основной граф.
+    /// Gets an immutable reference to the main graph.
     pub fn main_graph(&self) -> &Asg {
         &self.main_graph
     }
@@ -52,24 +52,24 @@ impl Default for GraphContext {
     }
 }
 
-/// Символьный дескриптор, представляющий узел в графе вычислений (ASG).
+/// Symbolic handle representing a node in the computation graph (ASG).
 ///
-/// Этот объект не содержит реальных данных. Он состоит из ID узла и ссылки
-/// на `GraphContext`, в котором этот узел существует.
+/// This object does not contain actual data. It consists of a node ID and a reference
+/// to the `GraphContext` where this node exists.
 ///
-/// Любая операция над этим объектом приводит к добавлению нового узла в граф.
+/// Any operation on this object results in adding a new node to the graph.
 #[derive(Debug, Clone)]
 pub struct Tensor {
-    /// ID узла в ASG, который представляет этот тензор.
+    /// Node ID in the ASG that this tensor represents.
     pub node_id: NodeId,
-    /// Разделяемая ссылка на контекст, в котором строится граф.
+    /// Shared reference to the context where the graph is being built.
     pub context: Rc<RefCell<GraphContext>>,
 }
 
 impl Tensor {
-    /// Создает новый "входной" узел в графе и возвращает дескриптор для него.
-    /// Входные узлы - это "переменные" графа, в которые будут подаваться
-    /// реальные данные во время выполнения.
+    /// Creates a new "input" node in the graph and returns a handle for it.
+    /// Input nodes are "variables" of the graph into which actual data
+    /// will be fed during execution.
     pub fn new_input(context: &Rc<RefCell<GraphContext>>, name: &str) -> Self {
         let mut ctx = context.borrow_mut();
         let graph = ctx.main_graph_mut();
@@ -81,7 +81,7 @@ impl Tensor {
             },
         );
 
-        // Регистрируем этот узел как один из входов графа.
+        // Register this node as one of the graph's inputs.
         graph.inputs.push(node_id);
 
         Self {
@@ -90,8 +90,8 @@ impl Tensor {
         }
     }
 
-    /// Создает новый "параметр" в графе.
-    /// Параметры - это обучаемые веса модели.
+    /// Creates a new "parameter" in the graph.
+    /// Parameters are trainable model weights.
     pub fn new_parameter(context: &Rc<RefCell<GraphContext>>, name: &str) -> Self {
         let node_id = context.borrow_mut().main_graph_mut().add_node(
             Some(name.to_string()),
@@ -105,8 +105,8 @@ impl Tensor {
         }
     }
 
-    /// Создает новый узел-константу (литерал) из реальных данных.
-    /// Эти данные будут встроены непосредственно в граф.
+    /// Creates a new constant node (literal) from actual data.
+    /// This data will be embedded directly into the graph.
     pub fn new_literal(context: &Rc<RefCell<GraphContext>>, data: ArrayD<f32>, name: &str) -> Self {
         let node_id = context.borrow_mut().main_graph_mut().add_node(
             Some(name.to_string()),
@@ -118,7 +118,7 @@ impl Tensor {
         }
     }
 
-    // --- Математические операции ---
+    // --- Mathematical operations ---
 
     pub fn pow(&self, power: &Tensor) -> Self {
         let node_id = self.context.borrow_mut().main_graph_mut().add_node(
@@ -153,7 +153,7 @@ impl Tensor {
         }
     }
 
-    // --- Функции активации ---
+    // --- Activation functions ---
 
     pub fn relu(&self) -> Self {
         let node_id = self
@@ -189,7 +189,7 @@ impl Tensor {
         }
     }
 
-    // --- Дополнительные функции активации ---
+    // --- Additional activation functions ---
 
     /// Tanh activation: (e^x - e^-x) / (e^x + e^-x)
     pub fn tanh(&self) -> Self {
@@ -215,7 +215,7 @@ impl Tensor {
         }
     }
 
-    /// GELU activation: x * Φ(x) где Φ - CDF стандартного нормального распределения
+    /// GELU activation: x * Φ(x) where Φ is the CDF of the standard normal distribution
     pub fn gelu(&self) -> Self {
         let node_id = self.context.borrow_mut().main_graph_mut().add_node(
             None,
@@ -357,7 +357,7 @@ impl Tensor {
         }
     }
 
-    // --- Операции редукции ---
+    // --- Reduction operations ---
 
     pub fn sum(&self) -> Self {
         let node_id = self
@@ -393,10 +393,10 @@ impl Tensor {
         }
     }
     
-    // --- Операции трансформации ---
+    // --- Transformation operations ---
 
     pub fn reshape(&self, shape: Vec<i64>) -> Self {
-        // Создаем узел-литерал, который содержит новую форму
+        // Create a literal node containing the new shape
         let shape_data_f32: Vec<f32> = shape.iter().map(|&x| x as f32).collect();
         let shape_array = ArrayD::from_shape_vec(ndarray::IxDyn(&[shape.len()]), shape_data_f32).unwrap();
         
@@ -575,7 +575,7 @@ impl Tensor {
 
 }
 
-// Реализация операторов для удобного синтаксиса `a + b`.
+// Operator implementations for convenient syntax like `a + b`.
 
 impl Add<&Tensor> for &Tensor {
     type Output = Tensor;

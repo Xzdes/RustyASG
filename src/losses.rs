@@ -1,12 +1,12 @@
-// --- Файл: src/losses.rs ---
+// --- File: src/losses.rs ---
 
-//! Модуль, содержащий реализации функций потерь в графовой парадигме.
+//! Module containing implementations of loss functions in graph paradigm.
 //!
-//! Функции потерь здесь - это обычные Rust-функции, которые принимают
-//! символьные `Tensor`-дескрипторы и добавляют в граф узлы, необходимые
-//! для вычисления значения ошибки.
+//! Loss functions here are regular Rust functions that take
+//! symbolic `Tensor` descriptors and add nodes to the graph necessary
+//! for computing the error value.
 //!
-//! # Доступные функции потерь
+//! # Available Loss Functions
 //!
 //! - **MSE (Mean Squared Error)**: `mse_loss`, `mse_loss_mean`
 //! - **L1 (Mean Absolute Error)**: `l1_loss`, `l1_loss_mean`
@@ -25,27 +25,27 @@ use crate::tensor::Tensor;
 // MSE Loss (Mean Squared Error)
 // ============================================================================
 
-/// Вычисляет символьный граф для Среднеквадратичной Ошибки (MSE) - сумма.
+/// Computes symbolic graph for Mean Squared Error (MSE) - sum.
 ///
-/// Формула: `MSE = sum((y_pred - y_true)^2)`.
+/// Formula: `MSE = sum((y_pred - y_true)^2)`.
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `y_pred` - Символьный `Tensor` с предсказаниями модели.
-/// * `y_true` - Символьный `Tensor` с истинными значениями.
+/// * `y_pred` - Symbolic `Tensor` with model predictions.
+/// * `y_true` - Symbolic `Tensor` with true values.
 ///
-/// # Возвращает
+/// # Returns
 ///
-/// Новый символьный `Tensor`, представляющий скалярный узел (loss) в графе.
+/// New symbolic `Tensor` representing a scalar node (loss) in the graph.
 pub fn mse_loss(y_pred: &Tensor, y_true: &Tensor) -> Tensor {
     let error = y_pred - y_true;
     let squared_error = &error * &error;
     squared_error.sum()
 }
 
-/// Вычисляет MSE со средним значением вместо суммы.
+/// Computes MSE with mean value instead of sum.
 ///
-/// Формула: `MSE = mean((y_pred - y_true)^2)`.
+/// Formula: `MSE = mean((y_pred - y_true)^2)`.
 pub fn mse_loss_mean(y_pred: &Tensor, y_true: &Tensor) -> Tensor {
     let error = y_pred - y_true;
     let squared_error = &error * &error;
@@ -56,17 +56,17 @@ pub fn mse_loss_mean(y_pred: &Tensor, y_true: &Tensor) -> Tensor {
 // L1 Loss (Mean Absolute Error)
 // ============================================================================
 
-/// Вычисляет L1 Loss (сумма абсолютных ошибок).
+/// Computes L1 Loss (sum of absolute errors).
 ///
-/// Формула: `L1 = sum(|y_pred - y_true|)`.
+/// Formula: `L1 = sum(|y_pred - y_true|)`.
 pub fn l1_loss(y_pred: &Tensor, y_true: &Tensor) -> Tensor {
     let error = y_pred - y_true;
     error.abs().sum()
 }
 
-/// Вычисляет L1 Loss со средним значением.
+/// Computes L1 Loss with mean value.
 ///
-/// Формула: `MAE = mean(|y_pred - y_true|)`.
+/// Formula: `MAE = mean(|y_pred - y_true|)`.
 pub fn l1_loss_mean(y_pred: &Tensor, y_true: &Tensor) -> Tensor {
     let error = y_pred - y_true;
     error.abs().mean()
@@ -76,34 +76,34 @@ pub fn l1_loss_mean(y_pred: &Tensor, y_true: &Tensor) -> Tensor {
 // Smooth L1 Loss (Huber Loss)
 // ============================================================================
 
-/// Вычисляет Smooth L1 Loss (Huber Loss).
+/// Computes Smooth L1 Loss (Huber Loss).
 ///
-/// Huber Loss менее чувствителен к выбросам, чем MSE.
-/// Использует квадратичную функцию для малых ошибок и линейную для больших.
+/// Huber Loss is less sensitive to outliers than MSE.
+/// Uses quadratic function for small errors and linear for large ones.
 ///
-/// Формула:
+/// Formula:
 /// ```text
 /// loss = 0.5 * x^2           if |x| < beta
 /// loss = beta * (|x| - 0.5 * beta)  otherwise
 /// ```
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `y_pred` - Предсказания модели
-/// * `y_true` - Истинные значения
-/// * `beta` - Порог перехода от квадратичной к линейной части (default: 1.0)
+/// * `y_pred` - Model predictions
+/// * `y_true` - True values
+/// * `beta` - Threshold for transition from quadratic to linear part (default: 1.0)
 pub fn smooth_l1_loss(y_pred: &Tensor, y_true: &Tensor, beta: f32) -> Tensor {
     let error = y_pred - y_true;
     let abs_error = error.abs();
 
-    // Создаем литерал для beta
+    // Create literal for beta
     let beta_tensor = Tensor::scalar(&y_pred.context, beta);
     let half = Tensor::scalar(&y_pred.context, 0.5);
 
     // mask = |error| < beta (returns 1.0 where true, 0.0 where false)
-    // Используем: quadratic_part = 0.5 * error^2 / beta
-    //            linear_part = |error| - 0.5 * beta
-    // Для упрощения используем приближение через clamp
+    // Using: quadratic_part = 0.5 * error^2 / beta
+    //        linear_part = |error| - 0.5 * beta
+    // For simplicity using approximation via clamp
 
     // Quadratic part: 0.5 * min(|error|, beta)^2 / beta
     let clamped = abs_error.clamp(0.0, beta);
@@ -119,7 +119,7 @@ pub fn smooth_l1_loss(y_pred: &Tensor, y_true: &Tensor, beta: f32) -> Tensor {
     total.sum()
 }
 
-/// Вычисляет Huber Loss со средним значением.
+/// Computes Huber Loss with mean value.
 pub fn huber_loss(y_pred: &Tensor, y_true: &Tensor, delta: f32) -> Tensor {
     smooth_l1_loss(y_pred, y_true, delta)
 }
@@ -128,15 +128,15 @@ pub fn huber_loss(y_pred: &Tensor, y_true: &Tensor, delta: f32) -> Tensor {
 // Cross-Entropy Loss
 // ============================================================================
 
-/// Вычисляет Cross-Entropy Loss для задач классификации.
+/// Computes Cross-Entropy Loss for classification tasks.
 ///
-/// Формула: `CE = -sum(y_true * log(y_pred + eps))`
+/// Formula: `CE = -sum(y_true * log(y_pred + eps))`
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `y_pred` - Предсказанные вероятности (после softmax)
-/// * `y_true` - One-hot encoded истинные метки
-/// * `eps` - Малое значение для численной стабильности
+/// * `y_pred` - Predicted probabilities (after softmax)
+/// * `y_true` - One-hot encoded true labels
+/// * `eps` - Small value for numerical stability
 pub fn cross_entropy_loss(y_pred: &Tensor, y_true: &Tensor, eps: f32) -> Tensor {
     let eps_tensor = Tensor::scalar(&y_pred.context, eps);
     let stabilized = y_pred + &eps_tensor;
@@ -145,17 +145,17 @@ pub fn cross_entropy_loss(y_pred: &Tensor, y_true: &Tensor, eps: f32) -> Tensor 
     ce.sum().neg()
 }
 
-/// Cross-Entropy Loss с Label Smoothing.
+/// Cross-Entropy Loss with Label Smoothing.
 ///
-/// Label smoothing помогает предотвратить overconfident предсказания.
+/// Label smoothing helps prevent overconfident predictions.
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `y_pred` - Предсказанные вероятности
-/// * `y_true` - One-hot encoded истинные метки
-/// * `smoothing` - Коэффициент сглаживания (0.0 - 1.0, обычно 0.1)
-/// * `num_classes` - Количество классов
-/// * `eps` - Малое значение для численной стабильности
+/// * `y_pred` - Predicted probabilities
+/// * `y_true` - One-hot encoded true labels
+/// * `smoothing` - Smoothing coefficient (0.0 - 1.0, typically 0.1)
+/// * `num_classes` - Number of classes
+/// * `eps` - Small value for numerical stability
 pub fn cross_entropy_with_label_smoothing(
     y_pred: &Tensor,
     y_true: &Tensor,
@@ -180,15 +180,15 @@ pub fn cross_entropy_with_label_smoothing(
 // Binary Cross-Entropy Loss
 // ============================================================================
 
-/// Вычисляет Binary Cross-Entropy Loss.
+/// Computes Binary Cross-Entropy Loss.
 ///
-/// Формула: `BCE = -mean(y_true * log(y_pred) + (1 - y_true) * log(1 - y_pred))`
+/// Formula: `BCE = -mean(y_true * log(y_pred) + (1 - y_true) * log(1 - y_pred))`
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `y_pred` - Предсказанные вероятности (0-1, после sigmoid)
-/// * `y_true` - Истинные метки (0 или 1)
-/// * `eps` - Малое значение для численной стабильности
+/// * `y_pred` - Predicted probabilities (0-1, after sigmoid)
+/// * `y_true` - True labels (0 or 1)
+/// * `eps` - Small value for numerical stability
 pub fn binary_cross_entropy(y_pred: &Tensor, y_true: &Tensor, eps: f32) -> Tensor {
     let eps_tensor = Tensor::scalar(&y_pred.context, eps);
     let one = Tensor::scalar(&y_pred.context, 1.0);
@@ -209,17 +209,17 @@ pub fn binary_cross_entropy(y_pred: &Tensor, y_true: &Tensor, eps: f32) -> Tenso
     bce.sum().neg()
 }
 
-/// Вычисляет BCE с логитами (численно стабильная версия).
+/// Computes BCE with logits (numerically stable version).
 ///
-/// Использует logits напрямую без предварительного применения sigmoid.
-/// Формула: `BCE = max(x, 0) - x * y + log(1 + exp(-|x|))`
+/// Uses logits directly without prior sigmoid application.
+/// Formula: `BCE = max(x, 0) - x * y + log(1 + exp(-|x|))`
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `logits` - Сырые логиты (до sigmoid)
-/// * `y_true` - Истинные метки (0 или 1)
+/// * `logits` - Raw logits (before sigmoid)
+/// * `y_true` - True labels (0 or 1)
 pub fn bce_with_logits(logits: &Tensor, y_true: &Tensor) -> Tensor {
-    // Численно стабильная формула:
+    // Numerically stable formula:
     // max(x, 0) - x * y + log(1 + exp(-|x|))
 
     let one = Tensor::scalar(&logits.context, 1.0);
@@ -252,15 +252,15 @@ pub fn bce_with_logits(logits: &Tensor, y_true: &Tensor) -> Tensor {
 // KL Divergence
 // ============================================================================
 
-/// Вычисляет KL Divergence (Kullback-Leibler Divergence).
+/// Computes KL Divergence (Kullback-Leibler Divergence).
 ///
-/// Формула: `KL(P || Q) = sum(P * log(P / Q))`
+/// Formula: `KL(P || Q) = sum(P * log(P / Q))`
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `p` - Истинное распределение
-/// * `q` - Предсказанное распределение
-/// * `eps` - Малое значение для численной стабильности
+/// * `p` - True distribution
+/// * `q` - Predicted distribution
+/// * `eps` - Small value for numerical stability
 pub fn kl_divergence(p: &Tensor, q: &Tensor, eps: f32) -> Tensor {
     let eps_tensor = Tensor::scalar(&p.context, eps);
 
@@ -278,16 +278,16 @@ pub fn kl_divergence(p: &Tensor, q: &Tensor, eps: f32) -> Tensor {
 // Negative Log Likelihood Loss
 // ============================================================================
 
-/// Вычисляет Negative Log Likelihood Loss.
+/// Computes Negative Log Likelihood Loss.
 ///
-/// Используется с log-softmax выходами.
+/// Used with log-softmax outputs.
 ///
-/// Формула: `NLL = -sum(y_true * log_probs)`
+/// Formula: `NLL = -sum(y_true * log_probs)`
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `log_probs` - Log-вероятности (выход log_softmax)
-/// * `y_true` - One-hot encoded истинные метки
+/// * `log_probs` - Log probabilities (log_softmax output)
+/// * `y_true` - One-hot encoded true labels
 pub fn nll_loss(log_probs: &Tensor, y_true: &Tensor) -> Tensor {
     let nll = y_true * log_probs;
     nll.sum().neg()
@@ -297,15 +297,15 @@ pub fn nll_loss(log_probs: &Tensor, y_true: &Tensor) -> Tensor {
 // Hinge Loss
 // ============================================================================
 
-/// Вычисляет Hinge Loss для SVM-подобных классификаторов.
+/// Computes Hinge Loss for SVM-like classifiers.
 ///
-/// Формула: `Hinge = sum(max(0, margin - y_true * y_pred))`
+/// Formula: `Hinge = sum(max(0, margin - y_true * y_pred))`
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `y_pred` - Предсказания модели
-/// * `y_true` - Истинные метки (-1 или +1)
-/// * `margin` - Маржа (default: 1.0)
+/// * `y_pred` - Model predictions
+/// * `y_true` - True labels (-1 or +1)
+/// * `margin` - Margin (default: 1.0)
 pub fn hinge_loss(y_pred: &Tensor, y_true: &Tensor, margin: f32) -> Tensor {
     let margin_tensor = Tensor::scalar(&y_pred.context, margin);
 
@@ -318,9 +318,9 @@ pub fn hinge_loss(y_pred: &Tensor, y_true: &Tensor, margin: f32) -> Tensor {
     hinge.sum()
 }
 
-/// Вычисляет Squared Hinge Loss.
+/// Computes Squared Hinge Loss.
 ///
-/// Формула: `SquaredHinge = sum(max(0, margin - y_true * y_pred)^2)`
+/// Formula: `SquaredHinge = sum(max(0, margin - y_true * y_pred)^2)`
 pub fn squared_hinge_loss(y_pred: &Tensor, y_true: &Tensor, margin: f32) -> Tensor {
     let margin_tensor = Tensor::scalar(&y_pred.context, margin);
 
@@ -335,22 +335,22 @@ pub fn squared_hinge_loss(y_pred: &Tensor, y_true: &Tensor, margin: f32) -> Tens
 // Focal Loss
 // ============================================================================
 
-/// Вычисляет Focal Loss для задач с несбалансированными классами.
+/// Computes Focal Loss for imbalanced class tasks.
 ///
-/// Focal Loss уменьшает вклад хорошо классифицированных примеров,
-/// позволяя модели сосредоточиться на сложных примерах.
+/// Focal Loss reduces the contribution of well-classified examples,
+/// allowing the model to focus on hard examples.
 ///
-/// Формула: `FL = -alpha * (1 - p_t)^gamma * log(p_t)`
+/// Formula: `FL = -alpha * (1 - p_t)^gamma * log(p_t)`
 ///
-/// где `p_t = p если y=1, иначе 1-p`
+/// where `p_t = p if y=1, else 1-p`
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `y_pred` - Предсказанные вероятности
-/// * `y_true` - One-hot encoded истинные метки
-/// * `alpha` - Балансирующий коэффициент (default: 0.25)
-/// * `gamma` - Фокусирующий параметр (default: 2.0)
-/// * `eps` - Малое значение для численной стабильности
+/// * `y_pred` - Predicted probabilities
+/// * `y_true` - One-hot encoded true labels
+/// * `alpha` - Balancing coefficient (default: 0.25)
+/// * `gamma` - Focusing parameter (default: 2.0)
+/// * `eps` - Small value for numerical stability
 pub fn focal_loss(
     y_pred: &Tensor,
     y_true: &Tensor,
@@ -367,7 +367,7 @@ pub fn focal_loss(
     let one_minus_pred = &one - y_pred;
     let p_t = &(y_true * y_pred) + &(&one_minus_true * &one_minus_pred);
 
-    // (1 - p_t)^gamma - используем exp(gamma * log(1 - p_t))
+    // (1 - p_t)^gamma - using exp(gamma * log(1 - p_t))
     let one_minus_pt = &one - &p_t;
     let one_minus_pt_stable = &one_minus_pt + &eps_tensor;
     let log_one_minus_pt = one_minus_pt_stable.log();
@@ -388,28 +388,28 @@ pub fn focal_loss(
 // Cosine Embedding Loss
 // ============================================================================
 
-/// Вычисляет Cosine Embedding Loss.
+/// Computes Cosine Embedding Loss.
 ///
-/// Используется для обучения embeddings, где похожие элементы
-/// должны иметь высокое косинусное сходство.
+/// Used for training embeddings where similar elements
+/// should have high cosine similarity.
 ///
-/// Формула:
+/// Formula:
 /// ```text
 /// loss = 1 - cos(x1, x2)      if y = 1
 /// loss = max(0, cos(x1, x2) - margin)  if y = -1
 /// ```
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `x1` - Первый вектор
-/// * `x2` - Второй вектор
-/// * `y` - Метка (1 для похожих, -1 для непохожих)
-/// * `margin` - Маржа для негативных пар (default: 0.0)
-/// * `eps` - Малое значение для численной стабильности
+/// * `x1` - First vector
+/// * `x2` - Second vector
+/// * `y` - Label (1 for similar, -1 for dissimilar)
+/// * `margin` - Margin for negative pairs (default: 0.0)
+/// * `eps` - Small value for numerical stability
 pub fn cosine_embedding_loss(
     x1: &Tensor,
     x2: &Tensor,
-    y: &Tensor, // 1 или -1 для каждой пары
+    y: &Tensor, // 1 or -1 for each pair
     margin: f32,
     eps: f32,
 ) -> Tensor {
@@ -418,11 +418,11 @@ pub fn cosine_embedding_loss(
     let eps_tensor = Tensor::scalar(&x1.context, eps);
 
     // Cosine similarity: cos = (x1 · x2) / (||x1|| * ||x2||)
-    // Для упрощения используем dot product и нормы
+    // For simplicity using dot product and norms
     let dot = &(x1 * x2);
     let dot_sum = dot.sum();
 
-    // ||x1||^2 и ||x2||^2
+    // ||x1||^2 and ||x2||^2
     let x1_sq = &(x1 * x1);
     let x2_sq = &(x2 * x2);
     let norm1_sq = x1_sq.sum();
@@ -436,9 +436,9 @@ pub fn cosine_embedding_loss(
     // cos = dot / norm_prod
     let cos_sim = &dot_sum / &norm_prod;
 
-    // Для y = 1: loss = 1 - cos
-    // Для y = -1: loss = max(0, cos - margin)
-    // Комбинируем: loss = (1 + y) / 2 * (1 - cos) + (1 - y) / 2 * max(0, cos - margin)
+    // For y = 1: loss = 1 - cos
+    // For y = -1: loss = max(0, cos - margin)
+    // Combined: loss = (1 + y) / 2 * (1 - cos) + (1 - y) / 2 * max(0, cos - margin)
 
     let half = Tensor::scalar(&x1.context, 0.5);
     let one_plus_y = &one + y;
@@ -465,16 +465,16 @@ pub fn cosine_embedding_loss(
 // Triplet Margin Loss
 // ============================================================================
 
-/// Вычисляет Triplet Margin Loss для metric learning.
+/// Computes Triplet Margin Loss for metric learning.
 ///
-/// Формула: `loss = max(0, d(anchor, positive) - d(anchor, negative) + margin)`
+/// Formula: `loss = max(0, d(anchor, positive) - d(anchor, negative) + margin)`
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `anchor` - Якорный вектор
-/// * `positive` - Позитивный вектор (должен быть близок к anchor)
-/// * `negative` - Негативный вектор (должен быть далек от anchor)
-/// * `margin` - Маржа между позитивной и негативной дистанцией
+/// * `anchor` - Anchor vector
+/// * `positive` - Positive vector (should be close to anchor)
+/// * `negative` - Negative vector (should be far from anchor)
+/// * `margin` - Margin between positive and negative distance
 pub fn triplet_margin_loss(
     anchor: &Tensor,
     positive: &Tensor,
@@ -500,16 +500,16 @@ pub fn triplet_margin_loss(
 // Margin Ranking Loss
 // ============================================================================
 
-/// Вычисляет Margin Ranking Loss.
+/// Computes Margin Ranking Loss.
 ///
-/// Формула: `loss = max(0, -y * (x1 - x2) + margin)`
+/// Formula: `loss = max(0, -y * (x1 - x2) + margin)`
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `x1` - Первый вход
-/// * `x2` - Второй вход
-/// * `y` - Метка: 1 если x1 должен быть больше x2, -1 иначе
-/// * `margin` - Маржа
+/// * `x1` - First input
+/// * `x2` - Second input
+/// * `y` - Label: 1 if x1 should be greater than x2, -1 otherwise
+/// * `margin` - Margin
 pub fn margin_ranking_loss(x1: &Tensor, x2: &Tensor, y: &Tensor, margin: f32) -> Tensor {
     let margin_tensor = Tensor::scalar(&x1.context, margin);
 

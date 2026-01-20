@@ -1,18 +1,18 @@
-//! Модуль, определяющий основной трейт `Module` для всех слоев нейронной сети.
+//! Module defining the core `Module` trait for all neural network layers.
 
 use crate::tensor::Tensor;
 
-/// Трейт, определяющий общий интерфейс для всех слоев/модулей.
+/// Trait defining the common interface for all layers/modules.
 ///
-/// В графовой архитектуре `Module` - это любой компонент, который может
-/// добавлять в граф определенный паттерн операций и параметров.
+/// In the graph-based architecture, `Module` is any component that can
+/// add a specific pattern of operations and parameters to the graph.
 pub trait Module {
-    /// Выполняет "символьный" прямой проход, строя соответствующую часть графа.
+    /// Performs a "symbolic" forward pass, building the corresponding part of the graph.
     ///
-    /// Принимает входной символьный тензор и возвращает выходной символьный тензор.
+    /// Takes an input symbolic tensor and returns an output symbolic tensor.
     fn forward(&self, inputs: &Tensor) -> Tensor;
 
-    /// Возвращает список всех обучаемых параметров (в виде символьных тензоров),
-    /// которые принадлежат этому модулю.
+    /// Returns a list of all trainable parameters (as symbolic tensors)
+    /// that belong to this module.
     fn parameters(&self) -> Vec<Tensor>;
 }

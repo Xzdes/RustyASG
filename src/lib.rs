@@ -1,10 +1,9 @@
-//! # RustyASG: Графовый движок для глубокого обучения на Rust
+//! # RustyASG: Graph-based Deep Learning Engine in Rust
 //!
-//! **RustyASG** — это современный экспериментальный фреймворк для глубокого обучения,
-//! написанный на Rust. Его ключевая особенность — архитектура, построенная вокруг
-//! **Абстрактного Семантического Графа (ASG)**.
+//! **RustyASG** is a modern experimental deep learning framework written in Rust.
+//! Its key feature is an architecture built around the **Abstract Semantic Graph (ASG)**.
 //!
-//! ## Пример использования
+//! ## Usage Example
 //!
 //! ```no_run
 //! use std::rc::Rc;
@@ -12,21 +11,21 @@
 //! use rustyasg::tensor::{GraphContext, Tensor};
 //! use rustyasg::losses::mse_loss;
 //!
-//! // 1. Создаем контекст графа
+//! // 1. Create graph context
 //! let context = Rc::new(RefCell::new(GraphContext::new()));
 //!
-//! // 2. Определяем символьные входы
+//! // 2. Define symbolic inputs
 //! let input = Tensor::new_input(&context, "input");
 //! let expected = Tensor::new_input(&context, "expected");
 //!
-//! // 3. Строим граф вычислений
-//! let prediction = input.relu(); // Просто пример операции
+//! // 3. Build computation graph
+//! let prediction = input.relu(); // Just an example operation
 //! let loss = mse_loss(&prediction, &expected);
 //!
-//! // Граф готов к анализу, дифференцированию и выполнению на бэкенде!
+//! // Graph is ready for analysis, differentiation, and execution on a backend!
 //! ```
 
-// Объявляем публичные модули, составляющие API ядра библиотеки.
+// Declare public modules that constitute the core library API.
 pub mod analysis;
 pub mod asg;
 pub mod autograd;

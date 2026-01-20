@@ -1,5 +1,5 @@
-//! Автоматическое дифференцирование «граф-в-граф» с корректным broadcasting
-//! и полной поддержкой Parameter-узлов.
+//! Graph-to-graph automatic differentiation with correct broadcasting
+//! and full support for Parameter nodes.
 
 use crate::analysis::shape_inference::{ShapeInference, ShapeInferenceError};
 use crate::asg::{Asg, AsgError, NodeId, NodeType, Value};
@@ -8,22 +8,22 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum AutogradError {
-    #[error("Ошибка графа при построении градиентов: {0}")]
+    #[error("Graph error while building gradients: {0}")]
     Asg(#[from] AsgError),
 
-    #[error("Ошибка вывода формы в градиентном графе: {0}")]
+    #[error("Shape inference error in gradient graph: {0}")]
     Shape(#[from] ShapeInferenceError),
 
-    #[error("Операция '{0}' не поддерживает автоматическое дифференцирование. \
-             Рассмотрите использование альтернативной операции или реализуйте backward для неё.")]
+    #[error("Operation '{0}' does not support automatic differentiation. \
+             Consider using an alternative operation or implement backward for it.")]
     UnsupportedOperation(String),
 
-    #[error("Градиент для узла {0} не найден. \
-             Убедитесь, что узел связан с loss через дифференцируемые операции.")]
+    #[error("Gradient for node {0} not found. \
+             Ensure the node is connected to the loss through differentiable operations.")]
     GradientNotFound(NodeId),
 }
 
-/// Градиенты, построенные для одного целевого узла.
+/// Gradients built for a single target node.
 pub struct Gradients {
     src: Asg,
     grad: Asg,
@@ -31,7 +31,7 @@ pub struct Gradients {
 }
 
 impl Gradients {
-    /// Начать построение градиентов для исходного графа `src`.
+    /// Start building gradients for the source graph `src`.
     pub fn new(src: Asg) -> Self {
         let grad_id = src.id.wrapping_add(1);
         Self {
@@ -41,16 +41,16 @@ impl Gradients {
         }
     }
 
-    /// Построить граф градиентов `∂loss/∂wrt`.
-    /// Возвращает новый ASG, выходы которого — градиенты по каждому узлу из `wrt`.
+    /// Build the gradient graph `∂loss/∂wrt`.
+    /// Returns a new ASG whose outputs are gradients for each node in `wrt`.
     pub fn build(mut self, loss: NodeId, wrt: &[NodeId]) -> Result<Asg, AutogradError> {
-        // 1. Топологическая сортировка от loss
+        // 1. Topological sort from loss
         let order = self.topo(loss)?;
-        // 2. Создать «1» для ∂loss/∂loss
+        // 2. Create "1" for ∂loss/∂loss
         let one = self.lit_scalar(1.0);
         self.map.insert(loss, one);
 
-        // 3. Обратный проход для построения основного графа градиентов
+        // 3. Backward pass to build the main gradient graph
         for &node in order.iter().rev() {
             if !self.map.contains_key(&node) {
                 continue;
@@ -58,8 +58,8 @@ impl Gradients {
             let g_out = self.map[&node];
             self.backward_node(node, g_out)?;
         }
-        
-        // 4. Запускаем ShapeInference ОДИН РАЗ, когда граф почти готов.
+
+        // 4. Run ShapeInference ONCE when the graph is nearly ready
         let mut initial_shapes = HashMap::new();
         for n in self.src.nodes.values() {
             if let (Some(s), Some(dt)) = (&n.shape, &n.dtype) {
@@ -70,7 +70,7 @@ impl Gradients {
         self.grad.set_outputs(self.map.values().copied().collect());
         ShapeInference::run(&mut self.grad, &initial_shapes)?;
 
-        // 5. Корректируем градиенты для broadcast-операций, добавляя ReduceSumTo
+        // 5. Adjust gradients for broadcast operations by adding ReduceSumTo
         for &wrt_id in wrt {
              if let Some(&grad_id) = self.map.get(&wrt_id) {
                 let grad_node = self.grad.get_node(grad_id)?.clone();
@@ -84,21 +84,21 @@ impl Gradients {
                 }
             }
         }
-        
-        // 6. Собираем финальные выходы
+
+        // 6. Collect final outputs
         let final_outputs: Vec<_> = wrt
             .iter()
             .map(|&n| self.get_or_zero(n))
             .collect::<Result<_, _>>()?;
         self.grad.set_outputs(final_outputs);
 
-        // 7. Запускаем ShapeInference в последний раз, чтобы обработать новые узлы ReduceSumTo
+        // 7. Run ShapeInference one last time to process new ReduceSumTo nodes
         ShapeInference::run(&mut self.grad, &initial_shapes)?;
 
         Ok(self.grad)
     }
 
-    // ---------- внутренние вспомогательные методы ----------
+    // ---------- internal helper methods ----------
 
     fn ext_name(&self, src_id: NodeId) -> String {
         format!("external_{}_{}", self.src.id, src_id)
@@ -110,7 +110,7 @@ impl Gradients {
             .add_node(None, NodeType::Literal(Value::Tensor(arr)))
     }
 
-    /// Импортировать узел из src как External в grad.
+    /// Import a node from src as External in grad.
     fn import(&mut self, src_id: NodeId) -> Result<NodeId, AutogradError> {
         let name = self.ext_name(src_id);
         if let Some(node) = self.grad.nodes.values().find(|n| n.name.as_deref() == Some(&name)) {
@@ -132,7 +132,7 @@ impl Gradients {
         Ok(new_id)
     }
 
-    /// Получить градиент по узлу; если ещё нет — вернуть ноль подходящей формы.
+    /// Get the gradient for a node; if not present, return zero of appropriate shape.
     fn get_or_zero(&mut self, src_id: NodeId) -> Result<NodeId, AutogradError> {
         if let Some(&g) = self.map.get(&src_id) {
             return Ok(g);
@@ -155,7 +155,7 @@ impl Gradients {
         Ok(id)
     }
 
-    /// Простая функция аккумуляции градиента. Проверка на broadcast вынесена.
+    /// Simple gradient accumulation function. Broadcast checking is factored out.
     fn acc(&mut self, src_id: NodeId, delta: NodeId) -> Result<(), AutogradError> {
         let current_grad = self.map.get(&src_id).copied();
         let new_grad = if let Some(g) = current_grad {
@@ -167,12 +167,12 @@ impl Gradients {
         Ok(())
     }
 
-    /// Главный метод backward для одного узла.
+    /// Main backward method for a single node.
     fn backward_node(&mut self, node: NodeId, g_out: NodeId) -> Result<(), AutogradError> {
         let n = self.src.get_node(node)?.clone();
         match &n.node_type {
             NodeType::Input {..} | NodeType::Parameter { .. } | NodeType::Literal(_) | NodeType::External {..} => {}
-            
+
             NodeType::Add(a, b) => {
                 self.acc(*a, g_out)?;
                 self.acc(*b, g_out)?;
@@ -218,19 +218,19 @@ impl Gradients {
                 self.acc(*b, g_b)?;
             }
             NodeType::Mean(x) => {
-                // Mean по последней оси: mean(x) = sum(x, axis=-1) / n
-                // Градиент: d_x = g_out / n (broadcast по последней оси)
+                // Mean along last axis: mean(x) = sum(x, axis=-1) / n
+                // Gradient: d_x = g_out / n (broadcast along last axis)
                 let shape = self.src.get_node(*x)?.shape.as_ref().unwrap();
                 let n = *shape.last().unwrap_or(&1) as f32;
                 let scale = self.lit_scalar(1.0 / n);
 
-                // g_out имеет форму с последней осью = 1, нужно broadcast до исходной формы x
+                // g_out has shape with last axis = 1, need to broadcast to original shape of x
                 let x_node = self.import(*x)?;
                 let g_bcast = self.grad.add_node(None, NodeType::Broadcast(g_out, x_node));
                 let g_x = self.grad.add_node(None, NodeType::Multiply(g_bcast, scale));
                 self.acc(*x, g_x)?;
             }
-            // УДАЛЕНО: специальная обработка Variance больше не нужна
+            // REMOVED: special handling for Variance is no longer needed
             NodeType::Variance(_) => {
                  return Err(AutogradError::Asg(AsgError::InputNotFound("Variance autograd is handled by decomposition".to_string())));
             }
@@ -254,7 +254,7 @@ impl Gradients {
                 self.acc(*x, g_x)?;
             }
             NodeType::Softmax(x) => {
-                let s = self.import(node)?; 
+                let s = self.import(node)?;
                 let prod = self.grad.add_node(None, NodeType::Multiply(g_out, s.clone()));
                 let sum_prod = self.grad.add_node(None, NodeType::Sum(prod));
                 let bcast_sum = self.grad.add_node(None, NodeType::Broadcast(sum_prod, g_out));
@@ -382,12 +382,8 @@ impl Gradients {
             }
             NodeType::GELU(x) => {
                 // GELU(x) ≈ 0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
-                // Производная сложная, используем численную аппроксимацию:
-                // d/dx GELU(x) ≈ 0.5 * (1 + tanh(k*(x + c*x^3))) + 0.5 * x * sech²(k*(x+c*x^3)) * k * (1 + 3*c*x^2)
-                // Упрощение: GELU'(x) ≈ Φ(x) + x * φ(x) где Φ - CDF, φ - PDF
-                // Для простоты: используем sigmoid-аппроксимацию GELU'(x) ≈ sigmoid(1.702 * x) * (1 + 1.702*x*(1-sigmoid(1.702*x)))
-                // Или еще проще: GELU'(x) ≈ 0.5 + 0.5*tanh(0.7978*x + 0.0356*x^3) + x * sech²(...) * ...
-                // Используем: d/dx GELU ≈ sigmoid(1.702*x) для простоты (грубая аппроксимация)
+                // Derivative is complex, using numerical approximation:
+                // Simplified: GELU'(x) ≈ sigmoid(1.702*x)
                 let x_node = self.import(*x)?;
                 let coef = self.lit_scalar(1.702);
                 let scaled_x = self.grad.add_node(None, NodeType::Multiply(coef, x_node));
@@ -399,9 +395,7 @@ impl Gradients {
                 // SiLU(x) = x * sigmoid(x)
                 // d/dx SiLU(x) = sigmoid(x) + x * sigmoid(x) * (1 - sigmoid(x))
                 //             = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
-                //             = sigmoid(x) * (1 + x - x*sigmoid(x))
-                //             = SiLU(x) + sigmoid(x) * (1 - SiLU(x)/x) если x != 0
-                // Проще: SiLU'(x) = sigmoid(x) + SiLU(x) * (1 - sigmoid(x))
+                // Simplified: SiLU'(x) = sigmoid(x) + SiLU(x) * (1 - sigmoid(x))
                 let x_node = self.import(*x)?;
                 let silu_x = self.import(node)?;
                 let sig_x = self.grad.add_node(None, NodeType::Sigmoid(x_node));
@@ -414,7 +408,7 @@ impl Gradients {
             }
             NodeType::Power(base, power) => {
                 // d/dx x^n = n * x^(n-1)
-                // Здесь power - это скаляр (константа)
+                // Here power is a scalar (constant)
                 let base_node = self.import(*base)?;
                 let power_node = self.import(*power)?;
                 // grad = power * base^(power-1) * g_out
@@ -424,11 +418,11 @@ impl Gradients {
                 let scaled = self.grad.add_node(None, NodeType::Multiply(power_node, base_pow));
                 let g_base = self.grad.add_node(None, NodeType::Multiply(g_out, scaled));
                 self.acc(*base, g_base)?;
-                // Градиент по power не поддерживается (обычно power - константа)
+                // Gradient w.r.t. power not supported (usually power is a constant)
             }
             NodeType::Embedding { indices, weight } => {
-                // Градиент по indices не определен (дискретные индексы)
-                // Градиент по weight - scatter-add операция
+                // Gradient w.r.t. indices is undefined (discrete indices)
+                // Gradient w.r.t. weight is scatter-add operation
                 let weight_node = self.src.get_node(*weight)?;
                 let weight_shape = weight_node.shape.as_ref().unwrap();
                 let num_embeddings = weight_shape[0];
@@ -515,8 +509,6 @@ impl Gradients {
                     // Bias gradient is sum of grad_output over (N, H, W), keeping C
                     // For simplicity, we use Sum then reshape
                     // grad_bias = sum(grad_output, axis=[0, 2, 3])
-                    // We'll implement this as a custom operation or decompose
-                    // For now, use a simple approach: Sum then broadcast back
                     let g_bias = self.grad.add_node(None, NodeType::Sum(g_out));
                     self.acc(*b, g_bias)?;
                 }

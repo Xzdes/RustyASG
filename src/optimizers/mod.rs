@@ -1,10 +1,10 @@
-//! Модуль, содержащий реализации оптимизаторов для обновления весов модели.
+//! Module containing implementations of optimizers for updating model weights.
 //!
-//! Оптимизаторы работают с реальными числовыми данными (`Value`) на CPU.
-//! Включает:
-//! - SGD (Stochastic Gradient Descent) с поддержкой momentum
+//! Optimizers work with real numerical data (`Value`) on CPU.
+//! Includes:
+//! - SGD (Stochastic Gradient Descent) with momentum support
 //! - Adam (Adaptive Moment Estimation)
-//! - AdamW (Adam с decoupled weight decay)
+//! - AdamW (Adam with decoupled weight decay)
 //! - RMSprop
 //! - Learning Rate Schedulers
 
@@ -12,18 +12,18 @@ use crate::asg::Value;
 use ndarray::ArrayD;
 use std::collections::HashMap;
 
-/// Трейт, определяющий общий интерфейс для всех оптимизаторов.
+/// Trait defining common interface for all optimizers.
 pub trait Optimizer {
-    /// Выполняет один шаг оптимизации, обновляя веса.
+    /// Performs one optimization step, updating weights.
     fn step(&mut self, parameters: &mut HashMap<String, Value>, gradients: &HashMap<String, Value>);
 
-    /// Обнуляет накопленные градиенты/состояние (для gradient accumulation).
+    /// Resets accumulated gradients/state (for gradient accumulation).
     fn zero_grad(&mut self) {}
 
-    /// Возвращает текущий learning rate.
+    /// Returns current learning rate.
     fn get_lr(&self) -> f32;
 
-    /// Устанавливает новый learning rate.
+    /// Sets new learning rate.
     fn set_lr(&mut self, lr: f32);
 }
 
@@ -31,27 +31,27 @@ pub trait Optimizer {
 // SGD - Stochastic Gradient Descent
 // ============================================================================
 
-/// Оптимизатор SGD с опциональным momentum и weight decay.
+/// SGD optimizer with optional momentum and weight decay.
 ///
-/// Формула:
-/// - Без momentum: `param = param - lr * grad`
-/// - С momentum: `v = momentum * v + grad; param = param - lr * v`
-/// - С weight decay: добавляется `lr * weight_decay * param`
+/// Formula:
+/// - Without momentum: `param = param - lr * grad`
+/// - With momentum: `v = momentum * v + grad; param = param - lr * v`
+/// - With weight decay: adds `lr * weight_decay * param`
 pub struct Sgd {
-    /// Скорость обучения
+    /// Learning rate
     pub lr: f32,
-    /// Коэффициент momentum (0 = без momentum)
+    /// Momentum coefficient (0 = no momentum)
     pub momentum: f32,
-    /// Weight decay (L2 регуляризация)
+    /// Weight decay (L2 regularization)
     pub weight_decay: f32,
     /// Nesterov momentum
     pub nesterov: bool,
-    /// Накопленные velocity для momentum
+    /// Accumulated velocity for momentum
     velocity: HashMap<String, ArrayD<f32>>,
 }
 
 impl Sgd {
-    /// Создаёт базовый SGD оптимизатор.
+    /// Creates a basic SGD optimizer.
     pub fn new(lr: f32) -> Self {
         Self {
             lr,
@@ -62,19 +62,19 @@ impl Sgd {
         }
     }
 
-    /// Добавляет momentum.
+    /// Adds momentum.
     pub fn with_momentum(mut self, momentum: f32) -> Self {
         self.momentum = momentum;
         self
     }
 
-    /// Добавляет weight decay.
+    /// Adds weight decay.
     pub fn with_weight_decay(mut self, weight_decay: f32) -> Self {
         self.weight_decay = weight_decay;
         self
     }
 
-    /// Включает Nesterov momentum.
+    /// Enables Nesterov momentum.
     pub fn with_nesterov(mut self) -> Self {
         self.nesterov = true;
         self
@@ -128,10 +128,10 @@ impl Optimizer for Sgd {
 // Adam - Adaptive Moment Estimation
 // ============================================================================
 
-/// Оптимизатор Adam.
+/// Adam optimizer.
 ///
-/// Адаптивный оптимизатор, комбинирующий momentum и RMSprop.
-/// Формула:
+/// Adaptive optimizer combining momentum and RMSprop.
+/// Formula:
 /// ```text
 /// m = beta1 * m + (1 - beta1) * grad
 /// v = beta2 * v + (1 - beta2) * grad^2
@@ -140,26 +140,26 @@ impl Optimizer for Sgd {
 /// param = param - lr * m_hat / (sqrt(v_hat) + eps)
 /// ```
 pub struct Adam {
-    /// Скорость обучения
+    /// Learning rate
     pub lr: f32,
-    /// Коэффициент экспоненциального усреднения для первого момента
+    /// Exponential averaging coefficient for first moment
     pub beta1: f32,
-    /// Коэффициент экспоненциального усреднения для второго момента
+    /// Exponential averaging coefficient for second moment
     pub beta2: f32,
-    /// Малая константа для численной стабильности
+    /// Small constant for numerical stability
     pub eps: f32,
-    /// Weight decay (L2 регуляризация, применяется к градиенту)
+    /// Weight decay (L2 regularization, applied to gradient)
     pub weight_decay: f32,
-    /// Первые моменты (m)
+    /// First moments (m)
     m: HashMap<String, ArrayD<f32>>,
-    /// Вторые моменты (v)
+    /// Second moments (v)
     v: HashMap<String, ArrayD<f32>>,
-    /// Счётчик шагов для bias correction
+    /// Step counter for bias correction
     t: usize,
 }
 
 impl Adam {
-    /// Создаёт Adam с параметрами по умолчанию.
+    /// Creates Adam with default parameters.
     pub fn new(lr: f32) -> Self {
         Self {
             lr,
@@ -173,25 +173,25 @@ impl Adam {
         }
     }
 
-    /// Устанавливает beta1.
+    /// Sets beta1.
     pub fn with_beta1(mut self, beta1: f32) -> Self {
         self.beta1 = beta1;
         self
     }
 
-    /// Устанавливает beta2.
+    /// Sets beta2.
     pub fn with_beta2(mut self, beta2: f32) -> Self {
         self.beta2 = beta2;
         self
     }
 
-    /// Устанавливает epsilon.
+    /// Sets epsilon.
     pub fn with_eps(mut self, eps: f32) -> Self {
         self.eps = eps;
         self
     }
 
-    /// Добавляет weight decay.
+    /// Adds weight decay.
     pub fn with_weight_decay(mut self, weight_decay: f32) -> Self {
         self.weight_decay = weight_decay;
         self
@@ -213,12 +213,12 @@ impl Optimizer for Adam {
             {
                 let mut grad = grad_tensor.clone();
 
-                // Weight decay (добавляется к градиенту - L2 регуляризация)
+                // Weight decay (added to gradient - L2 regularization)
                 if self.weight_decay > 0.0 {
                     grad = &grad + &(self.weight_decay * &*param_value);
                 }
 
-                // Инициализируем или получаем m и v
+                // Initialize or get m and v
                 let m = self.m
                     .entry(param_name.clone())
                     .or_insert_with(|| ArrayD::zeros(param_value.shape()));
@@ -245,7 +245,7 @@ impl Optimizer for Adam {
     }
 
     fn zero_grad(&mut self) {
-        // Adam хранит состояние, zero_grad не очищает его
+        // Adam stores state, zero_grad doesn't clear it
     }
 
     fn get_lr(&self) -> f32 {
@@ -261,59 +261,59 @@ impl Optimizer for Adam {
 // AdamW - Adam with Decoupled Weight Decay
 // ============================================================================
 
-/// Оптимизатор AdamW.
+/// AdamW optimizer.
 ///
-/// Отличается от Adam тем, что weight decay применяется напрямую к весам,
-/// а не к градиенту. Это приводит к лучшей регуляризации.
+/// Differs from Adam in that weight decay is applied directly to weights,
+/// not to the gradient. This leads to better regularization.
 ///
-/// Формула отличается: `param = param - lr * (m_hat / (sqrt(v_hat) + eps) + weight_decay * param)`
+/// Formula differs: `param = param - lr * (m_hat / (sqrt(v_hat) + eps) + weight_decay * param)`
 pub struct AdamW {
-    /// Скорость обучения
+    /// Learning rate
     pub lr: f32,
-    /// Коэффициент beta1
+    /// Beta1 coefficient
     pub beta1: f32,
-    /// Коэффициент beta2
+    /// Beta2 coefficient
     pub beta2: f32,
-    /// Epsilon для стабильности
+    /// Epsilon for stability
     pub eps: f32,
     /// Weight decay (decoupled)
     pub weight_decay: f32,
-    /// Первые моменты
+    /// First moments
     m: HashMap<String, ArrayD<f32>>,
-    /// Вторые моменты
+    /// Second moments
     v: HashMap<String, ArrayD<f32>>,
-    /// Счётчик шагов
+    /// Step counter
     t: usize,
 }
 
 impl AdamW {
-    /// Создаёт AdamW с параметрами по умолчанию.
+    /// Creates AdamW with default parameters.
     pub fn new(lr: f32) -> Self {
         Self {
             lr,
             beta1: 0.9,
             beta2: 0.999,
             eps: 1e-8,
-            weight_decay: 0.01, // Типичное значение для AdamW
+            weight_decay: 0.01, // Typical value for AdamW
             m: HashMap::new(),
             v: HashMap::new(),
             t: 0,
         }
     }
 
-    /// Устанавливает weight decay.
+    /// Sets weight decay.
     pub fn with_weight_decay(mut self, weight_decay: f32) -> Self {
         self.weight_decay = weight_decay;
         self
     }
 
-    /// Устанавливает beta1.
+    /// Sets beta1.
     pub fn with_beta1(mut self, beta1: f32) -> Self {
         self.beta1 = beta1;
         self
     }
 
-    /// Устанавливает beta2.
+    /// Sets beta2.
     pub fn with_beta2(mut self, beta2: f32) -> Self {
         self.beta2 = beta2;
         self
@@ -334,14 +334,14 @@ impl Optimizer for AdamW {
             {
                 let grad = grad_tensor.clone();
 
-                // Decoupled weight decay: сначала применяем к весам
+                // Decoupled weight decay: first apply to weights
                 if self.weight_decay > 0.0 {
                     ndarray::azip!((p in &mut *param_value) {
                         *p = *p * (1.0 - self.lr * self.weight_decay);
                     });
                 }
 
-                // Стандартный Adam update
+                // Standard Adam update
                 let m = self.m
                     .entry(param_name.clone())
                     .or_insert_with(|| ArrayD::zeros(param_value.shape()));
@@ -375,9 +375,9 @@ impl Optimizer for AdamW {
 // RMSprop
 // ============================================================================
 
-/// Оптимизатор RMSprop.
+/// RMSprop optimizer.
 ///
-/// Адаптивный оптимизатор, использующий скользящее среднее квадратов градиентов.
+/// Adaptive optimizer using running average of squared gradients.
 pub struct RMSprop {
     pub lr: f32,
     pub alpha: f32,     // Smoothing constant (default 0.99)
@@ -414,7 +414,7 @@ impl RMSprop {
 
 impl Optimizer for RMSprop {
     fn step(&mut self, parameters: &mut HashMap<String, Value>, gradients: &HashMap<String, Value>) {
-        // Копируем параметры чтобы избежать borrow checker проблем
+        // Copy parameters to avoid borrow checker issues
         let lr = self.lr;
         let alpha = self.alpha;
         let eps = self.eps;
@@ -473,13 +473,13 @@ impl Optimizer for RMSprop {
 // Learning Rate Schedulers
 // ============================================================================
 
-/// Трейт для Learning Rate Schedulers.
+/// Trait for Learning Rate Schedulers.
 pub trait LRScheduler {
-    /// Возвращает learning rate для данной эпохи/шага.
+    /// Returns learning rate for given epoch/step.
     fn get_lr(&self, epoch: usize, step: usize) -> f32;
 }
 
-/// Step LR - уменьшает LR каждые `step_size` эпох.
+/// Step LR - decreases LR every `step_size` epochs.
 pub struct StepLR {
     pub initial_lr: f32,
     pub step_size: usize,
@@ -498,7 +498,7 @@ impl LRScheduler for StepLR {
     }
 }
 
-/// Exponential LR - экспоненциальное убывание.
+/// Exponential LR - exponential decay.
 pub struct ExponentialLR {
     pub initial_lr: f32,
     pub gamma: f32,
@@ -516,7 +516,7 @@ impl LRScheduler for ExponentialLR {
     }
 }
 
-/// Cosine Annealing LR - косинусное убывание.
+/// Cosine Annealing LR - cosine decay.
 pub struct CosineAnnealingLR {
     pub initial_lr: f32,
     pub min_lr: f32,
@@ -545,7 +545,7 @@ impl LRScheduler for CosineAnnealingLR {
     }
 }
 
-/// Linear Warmup LR - линейный прогрев.
+/// Linear Warmup LR - linear warmup.
 pub struct LinearWarmupLR {
     pub target_lr: f32,
     pub warmup_steps: usize,
@@ -567,7 +567,7 @@ impl LRScheduler for LinearWarmupLR {
     }
 }
 
-/// Warmup + Cosine Annealing - комбинированный scheduler.
+/// Warmup + Cosine Annealing - combined scheduler.
 pub struct WarmupCosineAnnealingLR {
     pub target_lr: f32,
     pub min_lr: f32,
@@ -608,9 +608,9 @@ impl LRScheduler for WarmupCosineAnnealingLR {
 // Gradient Clipping Utilities
 // ============================================================================
 
-/// Обрезает градиенты по норме.
+/// Clips gradients by norm.
 pub fn clip_grad_norm(gradients: &mut HashMap<String, Value>, max_norm: f32) -> f32 {
-    // Вычисляем общую норму
+    // Compute total norm
     let mut total_norm_sq = 0.0f32;
     for grad_value in gradients.values() {
         if let Value::Tensor(grad) = grad_value {
@@ -619,7 +619,7 @@ pub fn clip_grad_norm(gradients: &mut HashMap<String, Value>, max_norm: f32) -> 
     }
     let total_norm = total_norm_sq.sqrt();
 
-    // Если норма превышает max_norm, масштабируем градиенты
+    // If norm exceeds max_norm, scale gradients
     if total_norm > max_norm {
         let clip_coef = max_norm / (total_norm + 1e-6);
         for grad_value in gradients.values_mut() {
@@ -632,7 +632,7 @@ pub fn clip_grad_norm(gradients: &mut HashMap<String, Value>, max_norm: f32) -> 
     total_norm
 }
 
-/// Обрезает градиенты по значению.
+/// Clips gradients by value.
 pub fn clip_grad_value(gradients: &mut HashMap<String, Value>, max_value: f32) {
     for grad_value in gradients.values_mut() {
         if let Value::Tensor(grad) = grad_value {
@@ -673,12 +673,12 @@ mod tests {
             ("w".to_string(), Value::Tensor(array![0.1, 0.2].into_dyn()))
         ]);
 
-        // Несколько шагов
+        // Several steps
         for _ in 0..10 {
             adam.step(&mut params, &grads);
         }
 
-        // Параметры должны измениться
+        // Parameters should change
         if let Value::Tensor(w) = &params["w"] {
             assert!(w[0] < 1.0);
             assert!(w[1] < 2.0);
@@ -703,7 +703,7 @@ mod tests {
         assert!((norm - 5.0).abs() < 1e-5); // Original norm is 5
 
         if let Value::Tensor(g) = &grads["w"] {
-            // После clipping норма должна быть 1.0
+            // After clipping norm should be 1.0
             let new_norm = (g[0] * g[0] + g[1] * g[1]).sqrt();
             assert!((new_norm - 1.0).abs() < 1e-5);
         }
