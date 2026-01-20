@@ -31,3 +31,15 @@ petgraph = "0.8.2"
 
 [dev-dependencies]
 approx = "0.5.1"
+
+[[example]]
+name = "xor"
+path = "examples/xor.rs"
+
+[[example]]
+name = "mnist"
+path = "examples/mnist.rs"
+
+[[example]]
+name = "linear_regression"
+path = "examples/linear_regression.rs"
