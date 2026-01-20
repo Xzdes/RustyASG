@@ -124,14 +124,48 @@ pub enum NodeType {
     Sigmoid(NodeId),
     Log(NodeId),
     Sqrt(NodeId),
+    Exp(NodeId),
+    Abs(NodeId),
+    Neg(NodeId),
     Power(NodeId, NodeId), // Второй аргумент - степень (может быть константой)
     Softmax(NodeId), // Softmax по последней оси
+
+    // --- Дополнительные активации ---
+    Tanh(NodeId),
+    LeakyReLU(NodeId, f32), // (input, negative_slope)
+    GELU(NodeId),
+    SiLU(NodeId), // также известен как Swish
+    ELU(NodeId, f32), // (input, alpha)
+    Softplus(NodeId, f32), // (input, beta)
+    Clamp(NodeId, f32, f32), // (input, min, max)
 
     // --- Операции свертки/редукции ---
     Sum(NodeId), // Сумма всех элементов тензора
     Mean(NodeId), // Среднее по последней оси
     Variance(NodeId), // Дисперсия по последней оси
 
+    // --- Embedding операции ---
+    /// Embedding lookup: преобразует индексы в плотные векторы.
+    /// indices: [*] (любая форма), weight: [num_embeddings, embedding_dim]
+    /// Выход: [*, embedding_dim]
+    Embedding {
+        /// Тензор индексов (целые числа, представленные как f32).
+        indices: NodeId,
+        /// Матрица embeddings формы [num_embeddings, embedding_dim].
+        weight: NodeId,
+    },
+    /// Градиент для Embedding: scatter-add операция.
+    /// Аккумулирует градиенты в матрицу весов по индексам.
+    /// grad_output: [*, embedding_dim], indices: [*]
+    /// Выход: [num_embeddings, embedding_dim]
+    EmbeddingGrad {
+        /// Градиент от последующих операций [*, embedding_dim].
+        grad_output: NodeId,
+        /// Индексы, по которым производился lookup.
+        indices: NodeId,
+        /// Количество embeddings (размер словаря).
+        num_embeddings: usize,
+    },
 
     // --- Операции трансформации ---
     Reshape(NodeId, NodeId), // Второй аргумент - тензор с новой формой
@@ -143,7 +177,40 @@ pub enum NodeType {
     /// Используется в autograd для градиентов от broadcast-операций.
     ReduceSumTo(NodeId, NodeId),
 
-        MaxPool2d {
+    // --- Операции свертки (Convolution) ---
+    /// 2D Свертка (Convolution 2D).
+    /// Входной тензор формы [N, C_in, H, W], ядро формы [C_out, C_in, kH, kW].
+    Conv2d {
+        /// Входной тензор формы [N, C_in, H, W].
+        input: NodeId,
+        /// Ядро свертки (weights) формы [C_out, C_in/groups, kH, kW].
+        weight: NodeId,
+        /// Опциональный bias формы [C_out].
+        bias: Option<NodeId>,
+        /// Шаг свертки (stride_h, stride_w).
+        stride: (usize, usize),
+        /// Паддинг (pad_h, pad_w).
+        padding: (usize, usize),
+        /// Дилатация (dilation_h, dilation_w).
+        dilation: (usize, usize),
+        /// Количество групп для grouped convolution.
+        groups: usize,
+    },
+
+    /// Транспонированная 2D свертка (Deconvolution).
+    ConvTranspose2d {
+        input: NodeId,
+        weight: NodeId,
+        bias: Option<NodeId>,
+        stride: (usize, usize),
+        padding: (usize, usize),
+        output_padding: (usize, usize),
+        dilation: (usize, usize),
+        groups: usize,
+    },
+
+    // --- Операции пулинга (Pooling) ---
+    MaxPool2d {
         /// Входной тензор, обычно формы [N, C, H, W].
         input: NodeId,
         /// Размер окна, например (2, 2).
@@ -151,13 +218,42 @@ pub enum NodeType {
         /// Шаг окна, например (2, 2).
         stride: (usize, usize),
     },
-        MaxUnpool2d {
+
+    MaxUnpool2d {
         /// Входной градиент (из вышестоящего слоя).
         input: NodeId,
         /// Ссылка на ИСХОДНЫЙ вход MaxPool2d (нужен для определения формы выхода).
-        original_input: NodeId, 
+        original_input: NodeId,
         kernel_size: (usize, usize),
         stride: (usize, usize),
+    },
+
+    /// Average Pooling 2D.
+    AvgPool2d {
+        input: NodeId,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+        padding: (usize, usize),
+    },
+
+    /// Backward pass for AvgPool2d.
+    /// Distributes gradient uniformly across the pooling window.
+    AvgUnpool2d {
+        /// Gradient from next layer.
+        input: NodeId,
+        /// Reference to original AvgPool2d input for shape.
+        original_input: NodeId,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+        padding: (usize, usize),
+    },
+
+    /// Adaptive Average Pooling 2D - автоматически вычисляет параметры
+    /// для достижения нужного выходного размера.
+    AdaptiveAvgPool2d {
+        input: NodeId,
+        /// Целевой выходной размер (H_out, W_out).
+        output_size: (usize, usize),
     },
 
     // --- Управляющие конструкции ---

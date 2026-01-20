@@ -30,8 +30,11 @@
 pub mod analysis;
 pub mod asg;
 pub mod autograd;
+pub mod data;
 pub mod losses;
+pub mod metrics;
 pub mod nn;
 pub mod optimizers;
 pub mod runtime;
+pub mod serialization;
 pub mod tensor;

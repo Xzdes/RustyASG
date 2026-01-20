@@ -215,7 +215,7 @@ fn run_training_loop<B: Backend>(
     grad_graph: asg::Asg,
     mut runtime_data: HashMap<String, Value>,
     param_tensors: Vec<Tensor>,
-    optimizer: Sgd,
+    mut optimizer: Sgd,
 ) {
     let param_names: Vec<String> = param_tensors
         .iter()

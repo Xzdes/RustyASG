@@ -133,7 +133,16 @@ impl ShapeInference {
                 Ok((out_shape, ld))
             }
 
-            NodeType::ReLU(id) | NodeType::Sigmoid(id) | NodeType::Sqrt(id) | NodeType::Log(id) => {
+            // Поэлементные операции - форма не меняется
+            NodeType::ReLU(id) | NodeType::Sigmoid(id) | NodeType::Sqrt(id) | NodeType::Log(id) |
+            NodeType::Exp(id) | NodeType::Abs(id) | NodeType::Neg(id) | NodeType::Tanh(id) |
+            NodeType::GELU(id) | NodeType::SiLU(id) => {
+                Self::get_shape_dtype(asg, *id)
+            }
+
+            // Поэлементные с параметрами - форма не меняется
+            NodeType::LeakyReLU(id, _) | NodeType::ELU(id, _) | NodeType::Softplus(id, _) |
+            NodeType::Clamp(id, _, _) => {
                 Self::get_shape_dtype(asg, *id)
             }
 
@@ -224,10 +233,153 @@ NodeType::MaxPool2d { input, kernel_size, stride } => {
                 // для соответствующего pooling'а.
                 Self::get_shape_dtype(asg, *original_input)
             }
-            
+
             NodeType::Power(base_id, _power_id) => {
                 // Форма определяется базой
                 Self::get_shape_dtype(asg, *base_id)
+            }
+
+            // Conv2d: [N, C_in, H, W] -> [N, C_out, H_out, W_out]
+            NodeType::Conv2d { input, weight, stride, padding, dilation, groups, .. } => {
+                let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
+                let (weight_shape, _) = Self::get_shape_dtype(asg, *weight)?;
+
+                if input_shape.len() != 4 {
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: 4,
+                        actual: input_shape.len(),
+                    });
+                }
+                if weight_shape.len() != 4 {
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: 4,
+                        actual: weight_shape.len(),
+                    });
+                }
+
+                let n = input_shape[0];
+                let h = input_shape[2];
+                let w = input_shape[3];
+
+                let out_channels = weight_shape[0];
+                let kernel_h = weight_shape[2];
+                let kernel_w = weight_shape[3];
+
+                // Effective kernel size with dilation
+                let eff_kh = (kernel_h - 1) * dilation.0 + 1;
+                let eff_kw = (kernel_w - 1) * dilation.1 + 1;
+
+                let out_h = (h + 2 * padding.0 - eff_kh) / stride.0 + 1;
+                let out_w = (w + 2 * padding.1 - eff_kw) / stride.1 + 1;
+
+                Ok((vec![n, out_channels, out_h, out_w], dtype))
+            }
+
+            // ConvTranspose2d: [N, C_in, H, W] -> [N, C_out, H_out, W_out]
+            NodeType::ConvTranspose2d { input, weight, stride, padding, output_padding, dilation, groups, .. } => {
+                let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
+                let (weight_shape, _) = Self::get_shape_dtype(asg, *weight)?;
+
+                if input_shape.len() != 4 {
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: 4,
+                        actual: input_shape.len(),
+                    });
+                }
+
+                let n = input_shape[0];
+                let h = input_shape[2];
+                let w = input_shape[3];
+
+                let out_channels_per_group = weight_shape[1];
+                let out_channels = out_channels_per_group * groups;
+                let kernel_h = weight_shape[2];
+                let kernel_w = weight_shape[3];
+
+                let out_h = (h - 1) * stride.0 - 2 * padding.0 + dilation.0 * (kernel_h - 1) + output_padding.0 + 1;
+                let out_w = (w - 1) * stride.1 - 2 * padding.1 + dilation.1 * (kernel_w - 1) + output_padding.1 + 1;
+
+                Ok((vec![n, out_channels, out_h, out_w], dtype))
+            }
+
+            // AvgPool2d: [N, C, H, W] -> [N, C, H_out, W_out]
+            NodeType::AvgPool2d { input, kernel_size, stride, padding } => {
+                let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
+
+                if input_shape.len() != 4 {
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: 4,
+                        actual: input_shape.len(),
+                    });
+                }
+
+                let n = input_shape[0];
+                let c = input_shape[1];
+                let h = input_shape[2];
+                let w = input_shape[3];
+
+                let out_h = (h + 2 * padding.0 - kernel_size.0) / stride.0 + 1;
+                let out_w = (w + 2 * padding.1 - kernel_size.1) / stride.1 + 1;
+
+                Ok((vec![n, c, out_h, out_w], dtype))
+            }
+
+            // AdaptiveAvgPool2d: [N, C, H, W] -> [N, C, H_out, W_out]
+            NodeType::AdaptiveAvgPool2d { input, output_size } => {
+                let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
+
+                if input_shape.len() != 4 {
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: 4,
+                        actual: input_shape.len(),
+                    });
+                }
+
+                let n = input_shape[0];
+                let c = input_shape[1];
+
+                Ok((vec![n, c, output_size.0, output_size.1], dtype))
+            }
+
+            // Embedding: indices[*] + weight[num_embeddings, embedding_dim] -> [*, embedding_dim]
+            NodeType::Embedding { indices, weight } => {
+                let (indices_shape, _) = Self::get_shape_dtype(asg, *indices)?;
+                let (weight_shape, dtype) = Self::get_shape_dtype(asg, *weight)?;
+
+                if weight_shape.len() != 2 {
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: 2,
+                        actual: weight_shape.len(),
+                    });
+                }
+
+                let embedding_dim = weight_shape[1];
+
+                // Output shape: indices_shape + [embedding_dim]
+                let mut output_shape = indices_shape;
+                output_shape.push(embedding_dim);
+
+                Ok((output_shape, dtype))
+            }
+
+            // EmbeddingGrad: grad_output[*, embedding_dim] + indices[*] -> [num_embeddings, embedding_dim]
+            NodeType::EmbeddingGrad { grad_output, num_embeddings, .. } => {
+                let (grad_shape, dtype) = Self::get_shape_dtype(asg, *grad_output)?;
+                let embedding_dim = *grad_shape.last().unwrap();
+
+                Ok((vec![*num_embeddings, embedding_dim], dtype))
+            }
+
+            // AvgUnpool2d: output has same shape as original input
+            NodeType::AvgUnpool2d { original_input, .. } => {
+                let (orig_shape, dtype) = Self::get_shape_dtype(asg, *original_input)?;
+                Ok((orig_shape, dtype))
             }
 
             // --- Явно обрабатываем остальные узлы, чтобы избежать заглушки ---
@@ -287,12 +439,42 @@ NodeType::MaxPool2d { input, kernel_size, stride } => {
             | NodeType::Mean(a)
             | NodeType::Variance(a)
             | NodeType::Sqrt(a)
-            | NodeType::Log(a) => vec![*a],
+            | NodeType::Log(a)
+            | NodeType::Exp(a)
+            | NodeType::Abs(a)
+            | NodeType::Neg(a)
+            | NodeType::Tanh(a)
+            | NodeType::GELU(a)
+            | NodeType::SiLU(a) => vec![*a],
+
+            NodeType::LeakyReLU(a, _)
+            | NodeType::ELU(a, _)
+            | NodeType::Softplus(a, _)
+            | NodeType::Clamp(a, _, _) => vec![*a],
 
             NodeType::Transpose(a, _, _) => vec![*a],
             NodeType::MaxPool2d { input, .. } => vec![*input],
             NodeType::MaxUnpool2d { input, original_input, .. } => vec![*input, *original_input],
-            _ => vec![], 
+            NodeType::Conv2d { input, weight, bias, .. } => {
+                let mut deps = vec![*input, *weight];
+                if let Some(b) = bias {
+                    deps.push(*b);
+                }
+                deps
+            }
+            NodeType::ConvTranspose2d { input, weight, bias, .. } => {
+                let mut deps = vec![*input, *weight];
+                if let Some(b) = bias {
+                    deps.push(*b);
+                }
+                deps
+            }
+            NodeType::AvgPool2d { input, .. } => vec![*input],
+            NodeType::AdaptiveAvgPool2d { input, .. } => vec![*input],
+            NodeType::Embedding { indices, weight } => vec![*indices, *weight],
+            NodeType::EmbeddingGrad { grad_output, indices, .. } => vec![*grad_output, *indices],
+            NodeType::AvgUnpool2d { input, original_input, .. } => vec![*input, *original_input],
+            _ => vec![],
         };
 
         for input_id in inputs {

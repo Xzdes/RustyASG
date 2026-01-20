@@ -189,6 +189,174 @@ impl Tensor {
         }
     }
 
+    // --- Дополнительные функции активации ---
+
+    /// Tanh activation: (e^x - e^-x) / (e^x + e^-x)
+    pub fn tanh(&self) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Tanh(self.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// LeakyReLU activation: max(0, x) + negative_slope * min(0, x)
+    pub fn leaky_relu(&self, negative_slope: f32) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::LeakyReLU(self.node_id, negative_slope),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// GELU activation: x * Φ(x) где Φ - CDF стандартного нормального распределения
+    pub fn gelu(&self) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::GELU(self.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// SiLU/Swish activation: x * sigmoid(x)
+    pub fn silu(&self) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::SiLU(self.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// ELU activation: x if x > 0 else alpha * (e^x - 1)
+    pub fn elu(&self, alpha: f32) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::ELU(self.node_id, alpha),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// Softplus activation: log(1 + e^(beta*x)) / beta
+    pub fn softplus(&self, beta: f32) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Softplus(self.node_id, beta),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// Exponential: e^x
+    pub fn exp(&self) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Exp(self.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// Absolute value: |x|
+    pub fn abs(&self) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Abs(self.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// Negation: -x
+    pub fn neg(&self) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Neg(self.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// Clamp values to [min, max]
+    pub fn clamp(&self, min_val: f32, max_val: f32) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Clamp(self.node_id, min_val, max_val),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// Natural logarithm: ln(x)
+    pub fn log(&self) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Log(self.node_id),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// Square: x^2
+    pub fn square(&self) -> Self {
+        let two = Tensor::scalar(&self.context, 2.0);
+        self.pow(&two)
+    }
+
+    /// Creates a scalar tensor (0-dimensional) with the given value.
+    /// This is useful for creating constants in loss functions.
+    pub fn scalar(context: &Rc<RefCell<GraphContext>>, value: f32) -> Self {
+        let data = ArrayD::from_elem(ndarray::IxDyn(&[]), value);
+        let node_id = context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Literal(Value::Tensor(data)),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(context),
+        }
+    }
+
+    /// Creates a 1D tensor from a vector of values.
+    pub fn from_vec(context: &Rc<RefCell<GraphContext>>, values: Vec<f32>) -> Self {
+        let len = values.len();
+        let data = ArrayD::from_shape_vec(ndarray::IxDyn(&[len]), values).unwrap();
+        let node_id = context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Literal(Value::Tensor(data)),
+        );
+        Self {
+            node_id,
+            context: Rc::clone(context),
+        }
+    }
+
     // --- Операции редукции ---
 
     pub fn sum(&self) -> Self {
@@ -265,6 +433,138 @@ impl Tensor {
                 input: self.node_id,
                 kernel_size,
                 stride,
+            },
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// 2D Convolution operation.
+    ///
+    /// # Arguments
+    /// * `weight` - Convolution kernel of shape [C_out, C_in/groups, kH, kW]
+    /// * `bias` - Optional bias of shape [C_out]
+    /// * `stride` - Stride (stride_h, stride_w)
+    /// * `padding` - Padding (pad_h, pad_w)
+    /// * `dilation` - Dilation (dilation_h, dilation_w)
+    /// * `groups` - Number of groups for grouped convolution
+    pub fn conv2d(
+        &self,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        stride: (usize, usize),
+        padding: (usize, usize),
+        dilation: (usize, usize),
+        groups: usize,
+    ) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Conv2d {
+                input: self.node_id,
+                weight: weight.node_id,
+                bias: bias.map(|b| b.node_id),
+                stride,
+                padding,
+                dilation,
+                groups,
+            },
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// Transposed 2D Convolution (Deconvolution).
+    pub fn conv_transpose2d(
+        &self,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        stride: (usize, usize),
+        padding: (usize, usize),
+        output_padding: (usize, usize),
+        dilation: (usize, usize),
+        groups: usize,
+    ) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::ConvTranspose2d {
+                input: self.node_id,
+                weight: weight.node_id,
+                bias: bias.map(|b| b.node_id),
+                stride,
+                padding,
+                output_padding,
+                dilation,
+                groups,
+            },
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// Average Pooling 2D.
+    pub fn avg_pool2d(
+        &self,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+        padding: (usize, usize),
+    ) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::AvgPool2d {
+                input: self.node_id,
+                kernel_size,
+                stride,
+                padding,
+            },
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// Adaptive Average Pooling 2D.
+    /// Automatically calculates parameters to achieve target output size.
+    pub fn adaptive_avg_pool2d(&self, output_size: (usize, usize)) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::AdaptiveAvgPool2d {
+                input: self.node_id,
+                output_size,
+            },
+        );
+        Self {
+            node_id,
+            context: Rc::clone(&self.context),
+        }
+    }
+
+    /// Embedding lookup: converts indices to dense vectors.
+    ///
+    /// # Arguments
+    /// * `weight` - Embedding matrix of shape [num_embeddings, embedding_dim]
+    ///
+    /// # Returns
+    /// Tensor of shape [*, embedding_dim] where * is the shape of self (indices)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let indices = Tensor::new_input(&context, "indices"); // shape: [batch, seq_len]
+    /// let embedding_weights = Tensor::new_parameter(&context, "embedding"); // shape: [vocab_size, embed_dim]
+    /// let embedded = indices.embedding(&embedding_weights); // shape: [batch, seq_len, embed_dim]
+    /// ```
+    pub fn embedding(&self, weight: &Tensor) -> Self {
+        let node_id = self.context.borrow_mut().main_graph_mut().add_node(
+            None,
+            NodeType::Embedding {
+                indices: self.node_id,
+                weight: weight.node_id,
             },
         );
         Self {
