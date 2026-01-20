@@ -1,42 +1,40 @@
-// --- Файл: src/nn/pooling.rs ---
+// --- File: src/nn/pooling.rs ---
 
-//! Модуль, реализующий слои пулинга (pooling) для CNN.
+//! Module implementing pooling layers for CNNs.
 
 use crate::nn::module::Module;
-use crate::tensor::{GraphContext, Tensor};
-use std::cell::RefCell;
-use std::rc::Rc;
+use crate::tensor::Tensor;
 
-/// Max Pooling 2D слой.
+/// Max Pooling 2D layer.
 ///
-/// Применяет max pooling к входному тензору формы [N, C, H, W].
-/// Выбирает максимальное значение из каждого окна.
+/// Applies max pooling to input tensor of shape [N, C, H, W].
+/// Selects maximum value from each window.
 ///
-/// # Пример
+/// # Example
 ///
 /// ```rust,ignore
 /// let pool = MaxPool2d::new((2, 2), (2, 2));
-/// let output = pool.forward(&input); // Уменьшает H и W в 2 раза
+/// let output = pool.forward(&input); // Reduces H and W by half
 /// ```
 pub struct MaxPool2d {
-    /// Размер окна (kH, kW).
+    /// Window size (kH, kW).
     pub kernel_size: (usize, usize),
-    /// Шаг (stride_h, stride_w).
+    /// Stride (stride_h, stride_w).
     pub stride: (usize, usize),
 }
 
 impl MaxPool2d {
-    /// Создает MaxPool2d слой.
+    /// Creates MaxPool2d layer.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `kernel_size` - Размер окна пулинга
-    /// * `stride` - Шаг пулинга (обычно равен kernel_size)
+    /// * `kernel_size` - Pooling window size
+    /// * `stride` - Pooling stride (usually equals kernel_size)
     pub fn new(kernel_size: (usize, usize), stride: (usize, usize)) -> Self {
         Self { kernel_size, stride }
     }
 
-    /// Создает MaxPool2d с одинаковым kernel_size и stride.
+    /// Creates MaxPool2d with equal kernel_size and stride.
     pub fn square(size: usize) -> Self {
         Self {
             kernel_size: (size, size),
@@ -51,25 +49,25 @@ impl Module for MaxPool2d {
     }
 
     fn parameters(&self) -> Vec<Tensor> {
-        vec![] // Pooling слои не имеют обучаемых параметров
+        vec![] // Pooling layers have no trainable parameters
     }
 }
 
-/// Average Pooling 2D слой.
+/// Average Pooling 2D layer.
 ///
-/// Применяет average pooling к входному тензору формы [N, C, H, W].
-/// Вычисляет среднее значение в каждом окне.
+/// Applies average pooling to input tensor of shape [N, C, H, W].
+/// Computes average value in each window.
 pub struct AvgPool2d {
-    /// Размер окна (kH, kW).
+    /// Window size (kH, kW).
     pub kernel_size: (usize, usize),
-    /// Шаг (stride_h, stride_w).
+    /// Stride (stride_h, stride_w).
     pub stride: (usize, usize),
-    /// Паддинг (pad_h, pad_w).
+    /// Padding (pad_h, pad_w).
     pub padding: (usize, usize),
 }
 
 impl AvgPool2d {
-    /// Создает AvgPool2d слой.
+    /// Creates AvgPool2d layer.
     pub fn new(kernel_size: (usize, usize), stride: (usize, usize)) -> Self {
         Self {
             kernel_size,
@@ -78,7 +76,7 @@ impl AvgPool2d {
         }
     }
 
-    /// Создает AvgPool2d с одинаковым kernel_size и stride.
+    /// Creates AvgPool2d with equal kernel_size and stride.
     pub fn square(size: usize) -> Self {
         Self {
             kernel_size: (size, size),
@@ -87,7 +85,7 @@ impl AvgPool2d {
         }
     }
 
-    /// Устанавливает паддинг.
+    /// Sets padding.
     pub fn with_padding(mut self, padding: (usize, usize)) -> Self {
         self.padding = padding;
         self
@@ -106,29 +104,29 @@ impl Module for AvgPool2d {
 
 /// Adaptive Average Pooling 2D.
 ///
-/// Автоматически вычисляет параметры пулинга для достижения
-/// заданного выходного размера. Полезен для создания фиксированного
-/// размера выхода независимо от размера входа.
+/// Automatically computes pooling parameters to achieve
+/// target output size. Useful for creating fixed output
+/// size regardless of input size.
 ///
-/// # Пример
+/// # Example
 ///
 /// ```rust,ignore
-/// // Всегда выдает выход размера [N, C, 1, 1] независимо от размера входа
+/// // Always outputs size [N, C, 1, 1] regardless of input size
 /// let gap = AdaptiveAvgPool2d::new((1, 1));
 /// let output = gap.forward(&input); // Global Average Pooling
 /// ```
 pub struct AdaptiveAvgPool2d {
-    /// Целевой выходной размер (H_out, W_out).
+    /// Target output size (H_out, W_out).
     pub output_size: (usize, usize),
 }
 
 impl AdaptiveAvgPool2d {
-    /// Создает AdaptiveAvgPool2d слой.
+    /// Creates AdaptiveAvgPool2d layer.
     pub fn new(output_size: (usize, usize)) -> Self {
         Self { output_size }
     }
 
-    /// Создает Global Average Pooling (GAP) - выходной размер (1, 1).
+    /// Creates Global Average Pooling (GAP) - output size (1, 1).
     pub fn global() -> Self {
         Self { output_size: (1, 1) }
     }
@@ -144,11 +142,11 @@ impl Module for AdaptiveAvgPool2d {
     }
 }
 
-/// Global Average Pooling - сокращение AdaptiveAvgPool2d с output_size (1, 1).
+/// Global Average Pooling - shorthand for AdaptiveAvgPool2d with output_size (1, 1).
 pub type GlobalAvgPool2d = AdaptiveAvgPool2d;
 
 impl GlobalAvgPool2d {
-    /// Создает Global Average Pooling слой.
+    /// Creates Global Average Pooling layer.
     pub fn new_global() -> Self {
         AdaptiveAvgPool2d::global()
     }
@@ -157,6 +155,9 @@ impl GlobalAvgPool2d {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tensor::GraphContext;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn test_max_pool2d() {

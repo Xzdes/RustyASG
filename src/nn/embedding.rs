@@ -1,17 +1,17 @@
-//! Модуль с реализацией слоя Embedding.
+//! Module with Embedding layer implementation.
 //!
-//! Embedding слой преобразует целочисленные индексы в плотные векторы
-//! фиксированной размерности. Широко используется в NLP для представления
-//! слов, токенов и других дискретных сущностей.
+//! Embedding layer transforms integer indices into dense vectors
+//! of fixed dimensionality. Widely used in NLP for representing
+//! words, tokens, and other discrete entities.
 
 use super::module::Module;
 use crate::tensor::{GraphContext, Tensor};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Слой Embedding для преобразования индексов в плотные векторы.
+/// Embedding layer for transforming indices into dense vectors.
 ///
-/// # Пример использования
+/// # Usage Example
 ///
 /// ```ignore
 /// use rustyasg::nn::Embedding;
@@ -25,27 +25,27 @@ use std::rc::Rc;
 /// ```
 #[derive(Debug, Clone)]
 pub struct Embedding {
-    /// Количество уникальных индексов (размер словаря).
+    /// Number of unique indices (vocabulary size).
     pub num_embeddings: usize,
-    /// Размерность embedding-вектора.
+    /// Embedding vector dimensionality.
     pub embedding_dim: usize,
-    /// Матрица embedding'ов формы [num_embeddings, embedding_dim].
+    /// Embedding matrix of shape [num_embeddings, embedding_dim].
     pub weight: Tensor,
 }
 
 impl Embedding {
-    /// Создает новый слой Embedding.
+    /// Creates a new Embedding layer.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `context` - Контекст графа
-    /// * `num_embeddings` - Размер словаря (количество уникальных индексов)
-    /// * `embedding_dim` - Размерность выходных векторов
-    /// * `name` - Имя для параметров (используется как префикс)
+    /// * `context` - Graph context
+    /// * `num_embeddings` - Vocabulary size (number of unique indices)
+    /// * `embedding_dim` - Output vector dimensionality
+    /// * `name` - Name for parameters (used as prefix)
     ///
-    /// # Возвращает
+    /// # Returns
     ///
-    /// Новый экземпляр `Embedding` с весами формы [num_embeddings, embedding_dim]
+    /// New `Embedding` instance with weights of shape [num_embeddings, embedding_dim]
     pub fn new(
         context: &Rc<RefCell<GraphContext>>,
         num_embeddings: usize,
@@ -61,9 +61,9 @@ impl Embedding {
         }
     }
 
-    /// Создает слой Embedding с предоставленным тензором весов.
+    /// Creates Embedding layer with provided weight tensor.
     ///
-    /// Полезно для загрузки предобученных embedding'ов.
+    /// Useful for loading pretrained embeddings.
     pub fn from_weight(weight: Tensor, num_embeddings: usize, embedding_dim: usize) -> Self {
         Self {
             num_embeddings,
@@ -74,15 +74,15 @@ impl Embedding {
 }
 
 impl Module for Embedding {
-    /// Выполняет embedding lookup.
+    /// Performs embedding lookup.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `indices` - Тензор индексов любой формы [*]
+    /// * `indices` - Index tensor of any shape [*]
     ///
-    /// # Возвращает
+    /// # Returns
     ///
-    /// Тензор формы [*, embedding_dim]
+    /// Tensor of shape [*, embedding_dim]
     fn forward(&self, input: &Tensor) -> Tensor {
         input.embedding(&self.weight)
     }
@@ -115,17 +115,17 @@ mod tests {
         let context = Rc::new(RefCell::new(GraphContext::new()));
         let embedding = Embedding::new(&context, 5, 3, "emb");
 
-        // Создаем входные индексы
+        // Create input indices
         let indices = Tensor::new_input(&context, "indices");
 
         // Forward pass
         let output = embedding.forward(&indices);
 
-        // Устанавливаем выход графа
+        // Set graph output
         context.borrow_mut().main_graph_mut().set_output(output.node_id);
 
-        // Подготавливаем данные
-        // Embedding weights: 5x3 матрица
+        // Prepare data
+        // Embedding weights: 5x3 matrix
         let weight_data = arr2(&[
             [1.0, 2.0, 3.0],    // index 0
             [4.0, 5.0, 6.0],    // index 1
@@ -134,14 +134,14 @@ mod tests {
             [13.0, 14.0, 15.0], // index 4
         ]).into_dyn();
 
-        // Indices: [2, 3] -> выбираем index 0 и index 2
+        // Indices: [2, 3] -> select index 0 and index 2
         let indices_data = ArrayD::from_shape_vec(IxDyn(&[2]), vec![0.0, 2.0]).unwrap();
 
         let mut inputs = HashMap::new();
         inputs.insert("indices".to_string(), Value::Tensor(indices_data));
         inputs.insert("emb_weight".to_string(), Value::Tensor(weight_data));
 
-        // Запускаем
+        // Run
         let backend = CpuBackend::new();
         let device_data = backend.load_data(&inputs).unwrap();
 
@@ -168,7 +168,7 @@ mod tests {
         let graph = context.borrow().main_graph().clone();
         let (results, _) = backend.run(&graph, memo).unwrap();
 
-        // Проверяем результат
+        // Check result
         let result = &results[0];
         if let Value::Tensor(arr) = result {
             assert_eq!(arr.shape(), &[2, 3]); // [num_indices, embedding_dim]
