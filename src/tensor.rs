@@ -142,6 +142,21 @@ impl Tensor {
         }
     }
 
+    /// Alias for `dot` - matrix multiplication
+    pub fn matmul(&self, other: &Tensor) -> Self {
+        self.dot(other)
+    }
+
+    /// Raise to a scalar power (creates a literal for the exponent)
+    pub fn pow_scalar(&self, power: f32) -> Self {
+        let exp = Tensor::new_literal(
+            &self.context,
+            ndarray::arr0(power).into_dyn(),
+            "pow_exp",
+        );
+        self.pow(&exp)
+    }
+
     pub fn sqrt(&self) -> Self {
         let node_id = self.context.borrow_mut().main_graph_mut().add_node(
             None,

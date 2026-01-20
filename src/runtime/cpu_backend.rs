@@ -390,7 +390,35 @@ fn op_broadcast(source: Value, target: Value) -> Result<Value, RuntimeError> {
 }
 fn op_reshape(source: Value, shape_provider: Value) -> Result<Value, RuntimeError> { match (source, shape_provider) { (Value::Tensor(s), Value::Tensor(p)) => { let shape: Vec<usize> = p.iter().map(|&x| x as usize).collect(); let reshaped = s.to_shape(shape.as_slice()).map_err(|e| RuntimeError::ShapeError(e.to_string()))?; Ok(Value::Tensor(reshaped.to_owned())) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
 fn op_greater_than(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => { let mut r = a.clone(); if b.ndim() == 0 { r.mapv_inplace(|v| if v > *b.first().unwrap() { 1.0 } else { 0.0 }); } else { Zip::from(&mut r).and(&a).and(&b).for_each(|res, &va, &vb| *res = if va > vb { 1.0 } else { 0.0 }); } Ok(Value::Tensor(r)) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_softmax(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => { let mut result = a.clone(); let last_axis = Axis(a.ndim() - 1); result.axis_iter_mut(last_axis).for_each(|mut row| { let max_val = row.iter().fold(f32::NEG_INFINITY, |max, &val| max.max(val)); row.mapv_inplace(|x| (x - max_val).exp()); let sum = row.sum(); row.mapv_inplace(|x| x / sum); }); Ok(Value::Tensor(result)) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_softmax(operand: Value) -> Result<Value, RuntimeError> {
+    match operand {
+        Value::Tensor(a) => {
+            let mut result = a.clone();
+            let ndim = a.ndim();
+            if ndim == 0 {
+                return Ok(Value::Tensor(ndarray::arr0(1.0f32).into_dyn()));
+            }
+            // Softmax along last dimension: iterate over all axes except the last
+            let last_dim = a.shape()[ndim - 1];
+            let outer_size: usize = a.len() / last_dim;
+            let flat = result.as_slice_mut().unwrap();
+            for outer in 0..outer_size {
+                let offset = outer * last_dim;
+                let row = &mut flat[offset..offset + last_dim];
+                let max_val = row.iter().fold(f32::NEG_INFINITY, |max, &val| max.max(val));
+                for x in row.iter_mut() {
+                    *x = (*x - max_val).exp();
+                }
+                let sum: f32 = row.iter().sum();
+                for x in row.iter_mut() {
+                    *x /= sum;
+                }
+            }
+            Ok(Value::Tensor(result))
+        },
+        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+    }
+}
 fn op_matmul(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     let a = match lhs { Value::Tensor(val) => val, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) };
     let b = match rhs { Value::Tensor(val) => val, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) };
