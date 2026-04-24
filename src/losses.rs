@@ -1,5 +1,3 @@
-// --- File: src/losses.rs ---
-
 //! Module containing implementations of loss functions in graph paradigm.
 //!
 //! Loss functions here are regular Rust functions that take

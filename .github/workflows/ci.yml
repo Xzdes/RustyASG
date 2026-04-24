@@ -9,15 +9,19 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Pin the toolchain so clippy lints and rustc diagnostics don't change
+  # underneath us when upstream rolls out a new stable. Bump intentionally.
+  RUST_TOOLCHAIN: "1.89.0"
 
 jobs:
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
       - run: cargo fmt --all -- --check
 
@@ -25,9 +29,10 @@ jobs:
     name: cargo clippy (-D warnings)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --release --all-targets -- -D warnings
@@ -38,8 +43,10 @@ jobs:
     env:
       RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links"
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --lib --no-deps --release
 
@@ -51,9 +58,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@v2
 
@@ -67,8 +76,10 @@ jobs:
       - name: cargo build (all targets)
         run: cargo build --release --all-targets
 
+      # `--test-threads=1` avoids filesystem races on Windows when the
+      # serialization tests create temporary checkpoint files.
       - name: cargo test (library + integration, without GPU)
-        run: cargo test --release --lib --tests --test grad_check
+        run: cargo test --release --lib --tests --test grad_check -- --test-threads=1
 
       # GPU tests are best-effort: many runners lack a compute-capable adapter.
       # We mark this step `continue-on-error` so CI still goes green when the

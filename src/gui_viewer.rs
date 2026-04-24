@@ -98,7 +98,6 @@ impl eframe::App for GraphViewerApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             let (response, painter) = ui.allocate_painter(ui.available_size(), egui::Sense::drag());
 
-            // FIX (Warning): `drag_released` replaced with `drag_stopped`
             if response.drag_started() {
                 self.is_panning = true;
             }
@@ -138,23 +137,19 @@ impl eframe::App for GraphViewerApp {
                             egui::vec2(NODE_WIDTH, NODE_HEIGHT),
                         );
 
-                        // --- BEGIN FINAL FIX ---
                         let rounding = egui::Rounding::from(5.0);
                         let (_shape_type, fill_color) = get_node_style(node, asg);
                         let stroke = egui::Stroke::new(1.5, egui::Color32::WHITE);
 
-                        // FIX (Error): build `RectShape` with all missing fields.
                         painter.add(Shape::Rect(eframe::epaint::RectShape {
                             rect: node_rect,
                             rounding,
                             fill: fill_color,
                             stroke,
-                            // Fill in missing fields with their default values.
                             blur_width: 0.0,
                             fill_texture_id: Default::default(),
                             uv: egui::Rect::NOTHING,
                         }));
-                        // --- END FINAL FIX ---
 
                         let label = format_node_label(node);
                         painter.text(

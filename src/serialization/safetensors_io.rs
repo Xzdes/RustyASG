@@ -1,5 +1,3 @@
-// --- File: src/serialization/safetensors_io.rs ---
-
 //! Module for working with the SafeTensors format.
 //!
 //! SafeTensors is a safe and efficient tensor storage format developed by
@@ -269,13 +267,18 @@ mod tests {
             ),
         );
 
-        let path = "test_safetensors.safetensors";
+        // Unique temp path to avoid races when tests run in parallel on Windows.
+        let path = std::env::temp_dir().join(format!(
+            "rustyasg_safetensors_{}_{}.safetensors",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
 
-        // Save.
-        save_safetensors(path, &weights).expect("Failed to save");
-
-        // Load.
-        let loaded = load_safetensors(path).expect("Failed to load");
+        save_safetensors(&path, &weights).expect("Failed to save");
+        let loaded = load_safetensors(&path).expect("Failed to load");
 
         // Verify.
         assert_eq!(loaded.len(), 2);
@@ -307,14 +310,21 @@ mod tests {
             Value::Tensor(ArrayD::zeros(ndarray::IxDyn(&[4, 4]))),
         );
 
-        let path = "test_list.safetensors";
-        save_safetensors(path, &weights).expect("Failed to save");
+        let path = std::env::temp_dir().join(format!(
+            "rustyasg_list_{}_{}.safetensors",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        save_safetensors(&path, &weights).expect("Failed to save");
 
-        let names = list_tensors(path).expect("Failed to list");
+        let names = list_tensors(&path).expect("Failed to list");
         assert_eq!(names.len(), 2);
         assert!(names.contains(&"layer1.weight".to_string()));
         assert!(names.contains(&"layer2.weight".to_string()));
 
-        fs::remove_file(path).ok();
+        fs::remove_file(&path).ok();
     }
 }

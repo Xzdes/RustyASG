@@ -1,5 +1,3 @@
-// --- File: src/serialization/mod.rs ---
-
 //! Model serialization and deserialization.
 //!
 //! Supported formats:

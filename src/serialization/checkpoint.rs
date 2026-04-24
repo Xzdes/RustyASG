@@ -1,5 +1,3 @@
-// --- File: src/serialization/checkpoint.rs ---
-
 //! Module for creating and loading model checkpoints.
 //!
 //! A checkpoint includes:
@@ -410,20 +408,25 @@ mod tests {
 
         let checkpoint = Checkpoint::new(weights.clone(), config);
 
-        let path = "test_checkpoint_dir";
+        // Use a unique path under the OS temp directory so parallel test runs
+        // (`cargo test` runs in parallel by default) don't race on Windows.
+        let path = std::env::temp_dir().join(format!(
+            "rustyasg_ckpt_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
 
-        // Save.
-        save_checkpoint(path, &checkpoint).expect("Failed to save checkpoint");
-
-        // Load.
-        let loaded = load_checkpoint(path).expect("Failed to load checkpoint");
+        save_checkpoint(&path, &checkpoint).expect("Failed to save checkpoint");
+        let loaded = load_checkpoint(&path).expect("Failed to load checkpoint");
 
         assert_eq!(loaded.config.model_name, Some("test".to_string()));
         assert_eq!(loaded.config.epoch, 5);
         assert!(loaded.model_weights.contains_key("layer.weight"));
 
-        // Cleanup.
-        fs::remove_dir_all(path).ok();
+        fs::remove_dir_all(&path).ok();
     }
 
     #[test]

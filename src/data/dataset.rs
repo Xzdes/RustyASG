@@ -1,5 +1,3 @@
-// --- File: src/data/dataset.rs ---
-
 //! The `Dataset` trait and baseline implementations.
 
 use ndarray::ArrayD;

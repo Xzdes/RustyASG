@@ -1,5 +1,3 @@
-// --- File: src/metrics/regression.rs ---
-
 //! Regression metrics.
 
 use super::Metric;

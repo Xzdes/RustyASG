@@ -1,5 +1,3 @@
-// --- File: src/data/sampler.rs ---
-
 //! Data sampling strategies for DataLoader.
 
 use rand::seq::SliceRandom;

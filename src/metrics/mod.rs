@@ -1,5 +1,3 @@
-// --- File: src/metrics/mod.rs ---
-
 //! Metrics module for evaluating model quality.
 //!
 //! Provides a set of metrics for various machine-learning tasks:

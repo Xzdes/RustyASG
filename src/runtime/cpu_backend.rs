@@ -1032,7 +1032,6 @@ fn op_reduce_sum_to(source: Value, target_shape_provider: Value) -> Result<Value
         source_tensor = source_tensor.sum_axis(Axis(axis));
     }
 
-    // FIXED: Replaced .into_shape() with .to_shape()?.to_owned()
     source_tensor
         .to_shape(target_shape)
         .map_err(|e| RuntimeError::ShapeError(e.to_string()))

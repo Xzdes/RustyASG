@@ -1,4 +1,3 @@
-//  tests/grad_check.rs  (final compiling version)
 //! Verify backward pass correctness via numerical differentiation.
 
 #![allow(clippy::type_complexity)]

@@ -1,5 +1,3 @@
-// --- File: src/nn/pooling.rs ---
-
 //! Module implementing pooling layers for CNNs.
 
 use crate::nn::module::Module;

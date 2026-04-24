@@ -1,5 +1,3 @@
-// --- File: src/data/transforms.rs ---
-
 //! Data preprocessing transforms.
 
 use ndarray::ArrayD;

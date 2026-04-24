@@ -1,5 +1,3 @@
-// --- File: src/metrics/classification.rs ---
-
 //! Classification metrics.
 
 use super::Metric;

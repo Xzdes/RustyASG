@@ -1,5 +1,3 @@
-// --- File: src/data/dataloader.rs ---
-
 //! DataLoader - an iterator over data batches.
 
 use super::dataset::{Dataset, InMemoryDataset};
