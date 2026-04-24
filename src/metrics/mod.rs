@@ -1,13 +1,13 @@
-// --- Файл: src/metrics/mod.rs ---
+// --- File: src/metrics/mod.rs ---
 
-//! Модуль метрик для оценки качества моделей.
+//! Metrics module for evaluating model quality.
 //!
-//! Предоставляет набор метрик для различных задач машинного обучения:
-//! - **Классификация**: Accuracy, Precision, Recall, F1-Score, AUC-ROC
-//! - **Регрессия**: MSE, MAE, RMSE, R²
-//! - **Ранжирование**: MRR, NDCG
+//! Provides a set of metrics for various machine-learning tasks:
+//! - **Classification**: Accuracy, Precision, Recall, F1-Score, AUC-ROC
+//! - **Regression**: MSE, MAE, RMSE, R²
+//! - **Ranking**: MRR, NDCG
 //!
-//! # Пример использования
+//! # Example
 //!
 //! ```rust,ignore
 //! use rustyasg::metrics::{Accuracy, Metric};
@@ -23,36 +23,36 @@ pub mod regression;
 pub mod running;
 
 pub use classification::{
-    Accuracy, Precision, Recall, F1Score,
-    BinaryConfusionMatrix, MultiClassConfusionMatrix, TopKAccuracy,
+    Accuracy, BinaryConfusionMatrix, F1Score, MultiClassConfusionMatrix, Precision, Recall,
+    TopKAccuracy,
 };
 pub use regression::{
-    MeanSquaredError, MeanAbsoluteError, RSquared, RootMeanSquaredError,
-    MeanAbsolutePercentageError, ExplainedVariance, MaxError,
+    ExplainedVariance, MaxError, MeanAbsoluteError, MeanAbsolutePercentageError, MeanSquaredError,
+    RSquared, RootMeanSquaredError,
 };
 pub use running::{
-    RunningMean, RunningStd, RunningMinMax,
-    ExponentialMovingAverage, MetricLogger, MetricSummary, EarlyStopping,
+    EarlyStopping, ExponentialMovingAverage, MetricLogger, MetricSummary, RunningMean,
+    RunningMinMax, RunningStd,
 };
 
-/// Базовый трейт для всех метрик.
+/// Base trait for all metrics.
 pub trait Metric: Send + Sync {
-    /// Тип предсказания
+    /// Prediction type.
     type Prediction;
-    /// Тип целевого значения
+    /// Target value type.
     type Target;
-    /// Тип результата метрики
+    /// Metric output type.
     type Output;
 
-    /// Обновляет состояние метрики новыми данными.
+    /// Updates the metric state with new data.
     fn update(&mut self, predictions: &Self::Prediction, targets: &Self::Target);
 
-    /// Вычисляет текущее значение метрики.
+    /// Computes the current metric value.
     fn compute(&self) -> Self::Output;
 
-    /// Сбрасывает состояние метрики.
+    /// Resets the metric state.
     fn reset(&mut self);
 
-    /// Возвращает имя метрики.
+    /// Returns the metric name.
     fn name(&self) -> &str;
 }

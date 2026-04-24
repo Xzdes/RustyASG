@@ -44,12 +44,12 @@
 //! - [`RandomNoise`]: Add random noise for augmentation
 //! - [`Compose`]: Chain multiple transforms
 
-pub mod dataset;
 pub mod dataloader;
+pub mod dataset;
 pub mod sampler;
 pub mod transforms;
 
+pub use dataloader::{Batch, DataLoader};
 pub use dataset::{Dataset, InMemoryDataset, MapDataset};
-pub use dataloader::{DataLoader, Batch};
-pub use sampler::{Sampler, SequentialSampler, RandomSampler, BatchSampler};
-pub use transforms::{Transform, Compose, Normalize, RandomNoise};
+pub use sampler::{BatchSampler, RandomSampler, Sampler, SequentialSampler};
+pub use transforms::{Compose, Normalize, RandomNoise, Transform};

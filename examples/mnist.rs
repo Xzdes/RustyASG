@@ -10,6 +10,9 @@
 //!
 //! Run with: `cargo run --example mnist`
 
+// Demo code: readability-first style.
+#![allow(clippy::if_same_then_else, clippy::needless_range_loop)]
+
 use ndarray::{ArrayD, IxDyn};
 use rustyasg::analysis::shape_inference::ShapeInference;
 use rustyasg::asg::{DType, Value};
@@ -43,69 +46,116 @@ fn generate_synthetic_mnist(num_samples: usize) -> (ArrayD<f32>, ArrayD<f32>) {
                 0 => {
                     // Circle pattern
                     let center = 14.0;
-                    let dist = ((row as f32 - center).powi(2) + (col as f32 - center).powi(2)).sqrt();
-                    if dist > 8.0 && dist < 12.0 { 1.0 } else { 0.0 }
+                    let dist =
+                        ((row as f32 - center).powi(2) + (col as f32 - center).powi(2)).sqrt();
+                    if dist > 8.0 && dist < 12.0 {
+                        1.0
+                    } else {
+                        0.0
+                    }
                 }
                 1 => {
                     // Vertical line
-                    if col >= 12 && col <= 16 { 1.0 } else { 0.0 }
+                    if (12..=16).contains(&col) {
+                        1.0
+                    } else {
+                        0.0
+                    }
                 }
                 2 => {
                     // Top half horizontal, then diagonal
-                    if row < 10 && col > 8 && col < 20 { 1.0 }
-                    else if row >= 10 && row < 18 && col == 20 - (row - 10) { 1.0 }
-                    else if row >= 18 && col > 8 && col < 20 { 1.0 }
-                    else { 0.0 }
+                    if row < 10 && col > 8 && col < 20 {
+                        1.0
+                    } else if (10..18).contains(&row) && col == 20 - (row - 10) {
+                        1.0
+                    } else if row >= 18 && col > 8 && col < 20 {
+                        1.0
+                    } else {
+                        0.0
+                    }
                 }
                 3 => {
                     // Three horizontal lines
-                    if (row == 6 || row == 14 || row == 22) && col > 8 && col < 20 { 1.0 }
-                    else if col == 19 && row > 6 && row < 22 { 1.0 }
-                    else { 0.0 }
+                    if (row == 6 || row == 14 || row == 22) && col > 8 && col < 20 {
+                        1.0
+                    } else if col == 19 && row > 6 && row < 22 {
+                        1.0
+                    } else {
+                        0.0
+                    }
                 }
                 4 => {
                     // L shape rotated
-                    if col == 8 && row < 16 { 1.0 }
-                    else if row == 14 && col > 8 && col < 20 { 1.0 }
-                    else if col == 18 { 1.0 }
-                    else { 0.0 }
+                    if col == 8 && row < 16 {
+                        1.0
+                    } else if row == 14 && col > 8 && col < 20 {
+                        1.0
+                    } else if col == 18 {
+                        1.0
+                    } else {
+                        0.0
+                    }
                 }
                 5 => {
                     // S pattern
-                    if row == 6 && col > 8 && col < 20 { 1.0 }
-                    else if row > 6 && row < 14 && col == 8 { 1.0 }
-                    else if row == 14 && col > 8 && col < 20 { 1.0 }
-                    else if row > 14 && row < 22 && col == 19 { 1.0 }
-                    else if row == 22 && col > 8 && col < 20 { 1.0 }
-                    else { 0.0 }
+                    if row == 6 && col > 8 && col < 20 {
+                        1.0
+                    } else if row > 6 && row < 14 && col == 8 {
+                        1.0
+                    } else if row == 14 && col > 8 && col < 20 {
+                        1.0
+                    } else if row > 14 && row < 22 && col == 19 {
+                        1.0
+                    } else if row == 22 && col > 8 && col < 20 {
+                        1.0
+                    } else {
+                        0.0
+                    }
                 }
                 6 => {
                     // 6 pattern
                     let center = 14.0;
                     let dist = ((row as f32 - 18.0).powi(2) + (col as f32 - center).powi(2)).sqrt();
-                    if dist > 4.0 && dist < 7.0 { 1.0 }
-                    else if col == 8 && row > 6 && row < 18 { 1.0 }
-                    else if row == 6 && col > 8 && col < 20 { 1.0 }
-                    else { 0.0 }
+                    if dist > 4.0 && dist < 7.0 {
+                        1.0
+                    } else if col == 8 && row > 6 && row < 18 {
+                        1.0
+                    } else if row == 6 && col > 8 && col < 20 {
+                        1.0
+                    } else {
+                        0.0
+                    }
                 }
                 7 => {
                     // 7 pattern
-                    if row == 6 && col > 8 && col < 20 { 1.0 }
-                    else if row > 6 && col == 18usize.saturating_sub((row - 6) / 2) { 1.0 }
-                    else { 0.0 }
+                    if row == 6 && col > 8 && col < 20 {
+                        1.0
+                    } else if row > 6 && col == 18usize.saturating_sub((row - 6) / 2) {
+                        1.0
+                    } else {
+                        0.0
+                    }
                 }
                 8 => {
                     // 8 pattern - two circles
                     let dist1 = ((row as f32 - 10.0).powi(2) + (col as f32 - 14.0).powi(2)).sqrt();
                     let dist2 = ((row as f32 - 18.0).powi(2) + (col as f32 - 14.0).powi(2)).sqrt();
-                    if (dist1 > 3.0 && dist1 < 5.0) || (dist2 > 3.0 && dist2 < 5.0) { 1.0 } else { 0.0 }
+                    if (dist1 > 3.0 && dist1 < 5.0) || (dist2 > 3.0 && dist2 < 5.0) {
+                        1.0
+                    } else {
+                        0.0
+                    }
                 }
                 9 => {
                     // 9 pattern
                     let dist = ((row as f32 - 10.0).powi(2) + (col as f32 - 14.0).powi(2)).sqrt();
-                    if dist > 4.0 && dist < 7.0 { 1.0 }
-                    else if col == 19 && row > 10 && row < 24 { 1.0 }
-                    else { 0.0 }
+                    if dist > 4.0 && dist < 7.0 {
+                        1.0
+                    } else if col == 19 && row > 10 && row < 24 {
+                        1.0
+                    } else {
+                        0.0
+                    }
                 }
                 _ => 0.0,
             };
@@ -131,7 +181,7 @@ fn main() {
     let num_test = 20;
     println!("Generating synthetic MNIST data...");
     let (train_images, train_labels) = generate_synthetic_mnist(num_train);
-    let (test_images, test_labels) = generate_synthetic_mnist(num_test);
+    let (test_images, _test_labels) = generate_synthetic_mnist(num_test);
     println!("Train samples: {}, Test samples: {}\n", num_train, num_test);
 
     // Create graph context
@@ -141,10 +191,10 @@ fn main() {
     let x = Tensor::new_input(&context, "x");
     let y_true = Tensor::new_input(&context, "y_true");
 
-    // Build network: 784 -> 128 -> 64 -> 10
-    let layer1 = Linear::new(&context, "layer1"); // 784 -> 128
-    let layer2 = Linear::new(&context, "layer2"); // 128 -> 64
-    let layer3 = Linear::new(&context, "layer3"); // 64 -> 10
+    // Build network: 784 -> 128 -> 64 -> 10 (shapes/init auto-registered).
+    let layer1 = Linear::new(&context, "layer1", 784, 128);
+    let layer2 = Linear::new(&context, "layer2", 128, 64);
+    let layer3 = Linear::new(&context, "layer3", 64, 10);
 
     // Forward pass with ReLU activations
     // Using sigmoid instead of softmax for simpler gradients
@@ -157,7 +207,10 @@ fn main() {
     let loss = mse_loss_mean(&y_pred, &y_true);
 
     // Set output
-    context.borrow_mut().main_graph_mut().set_output(loss.node_id);
+    context
+        .borrow_mut()
+        .main_graph_mut()
+        .set_output(loss.node_id);
 
     // Get all parameters
     let params: Vec<Tensor> = [
@@ -203,7 +256,7 @@ fn main() {
         let scale = (6.0 / (fan_in + fan_out) as f32).sqrt();
         (0..fan_in * fan_out)
             .map(|i| {
-                let x = (i as f32 * 0.618033988749895) % 1.0; // Golden ratio for pseudo-random
+                let x = (i as f32 * 0.618_034) % 1.0; // Golden ratio for pseudo-random
                 (x * 2.0 - 1.0) * scale
             })
             .collect()
@@ -247,7 +300,10 @@ fn main() {
     let epochs = 100;
     let num_batches = num_train / batch_size;
 
-    println!("Training for {} epochs, batch size {}...\n", epochs, batch_size);
+    println!(
+        "Training for {} epochs, batch size {}...\n",
+        epochs, batch_size
+    );
 
     for epoch in 0..epochs {
         let mut epoch_loss = 0.0;
@@ -306,9 +362,12 @@ fn main() {
 
             // Extract gradients
             let param_names = [
-                "layer1.weights", "layer1.bias",
-                "layer2.weights", "layer2.bias",
-                "layer3.weights", "layer3.bias",
+                "layer1.weights",
+                "layer1.bias",
+                "layer2.weights",
+                "layer2.bias",
+                "layer3.weights",
+                "layer3.bias",
             ];
             let mut gradients: HashMap<String, Value> = HashMap::new();
             for (i, name) in param_names.iter().enumerate() {
@@ -334,16 +393,19 @@ fn main() {
     // Create inference context
     let inf_context = Rc::new(RefCell::new(GraphContext::new()));
     let x_inf = Tensor::new_input(&inf_context, "x");
-    let layer1_inf = Linear::new(&inf_context, "layer1");
-    let layer2_inf = Linear::new(&inf_context, "layer2");
-    let layer3_inf = Linear::new(&inf_context, "layer3");
+    let layer1_inf = Linear::new(&inf_context, "layer1", 784, 128);
+    let layer2_inf = Linear::new(&inf_context, "layer2", 128, 64);
+    let layer3_inf = Linear::new(&inf_context, "layer3", 64, 10);
 
     let h1_inf = layer1_inf.forward(&x_inf).relu();
     let h2_inf = layer2_inf.forward(&h1_inf).relu();
     let logits_inf = layer3_inf.forward(&h2_inf);
     let pred_inf = logits_inf.sigmoid();
 
-    inf_context.borrow_mut().main_graph_mut().set_output(pred_inf.node_id);
+    inf_context
+        .borrow_mut()
+        .main_graph_mut()
+        .set_output(pred_inf.node_id);
 
     // Run inference
     let mut inf_inputs = param_values.clone();
@@ -417,7 +479,10 @@ fn main() {
             }
             let true_class = i % 10;
             let correct = if max_idx == true_class { "✓" } else { "✗" };
-            println!("  {:2}  |  {}   |     {}     |   {}", i, true_class, max_idx, correct);
+            println!(
+                "  {:2}  |  {}   |     {}     |   {}",
+                i, true_class, max_idx, correct
+            );
         }
     }
 

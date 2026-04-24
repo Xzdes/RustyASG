@@ -1,6 +1,6 @@
-// --- Файл: src/metrics/regression.rs ---
+// --- File: src/metrics/regression.rs ---
 
-//! Метрики для задач регрессии.
+//! Regression metrics.
 
 use super::Metric;
 use ndarray::ArrayD;
@@ -136,11 +136,11 @@ impl Metric for MeanAbsoluteError {
 /// R-Squared (Coefficient of Determination).
 ///
 /// R² = 1 - SS_res / SS_tot
-/// где SS_res = Σ(y_true - y_pred)²
-///     SS_tot = Σ(y_true - mean(y_true))²
+/// where SS_res = Σ(y_true - y_pred)²
+///       SS_tot = Σ(y_true - mean(y_true))²
 #[derive(Debug, Clone, Default)]
 pub struct RSquared {
-    // Для Welford's online algorithm
+    // For Welford's online algorithm
     sum_squared_residuals: f64,
     sum_squared_total: f64,
     mean_target: f64,
@@ -161,7 +161,7 @@ impl Metric for RSquared {
     type Output = f64;
 
     fn update(&mut self, predictions: &Self::Prediction, targets: &Self::Target) {
-        // Кэшируем данные для финального расчета
+        // Cache data for the final computation.
         for (pred, target) in predictions.iter().zip(targets.iter()) {
             self.predictions_cache.push(*pred);
             self.targets_cache.push(*target);
@@ -173,9 +173,9 @@ impl Metric for RSquared {
             return 0.0;
         }
 
-        // Вычисляем среднее целевых значений
-        let mean_target: f64 =
-            self.targets_cache.iter().map(|&x| x as f64).sum::<f64>() / self.targets_cache.len() as f64;
+        // Compute the mean of targets.
+        let mean_target: f64 = self.targets_cache.iter().map(|&x| x as f64).sum::<f64>()
+            / self.targets_cache.len() as f64;
 
         // SS_res = Σ(y_true - y_pred)²
         let ss_res: f64 = self
@@ -312,7 +312,7 @@ impl Metric for ExplainedVariance {
 
         let n = self.targets.len() as f64;
 
-        // Вычисляем residuals
+        // Compute residuals.
         let residuals: Vec<f64> = self
             .targets
             .iter()
@@ -322,7 +322,11 @@ impl Metric for ExplainedVariance {
 
         // Variance of residuals
         let mean_res = residuals.iter().sum::<f64>() / n;
-        let var_res: f64 = residuals.iter().map(|&r| (r - mean_res).powi(2)).sum::<f64>() / n;
+        let var_res: f64 = residuals
+            .iter()
+            .map(|&r| (r - mean_res).powi(2))
+            .sum::<f64>()
+            / n;
 
         // Variance of targets
         let mean_target = self.targets.iter().map(|&x| x as f64).sum::<f64>() / n;
@@ -350,7 +354,7 @@ impl Metric for ExplainedVariance {
     }
 }
 
-/// Max Error - максимальная абсолютная ошибка.
+/// Max Error - the maximum absolute error.
 #[derive(Debug, Clone, Default)]
 pub struct MaxError {
     max_error: f64,
@@ -397,14 +401,9 @@ mod tests {
     fn test_mse() {
         let mut mse = MeanSquaredError::new();
 
-        let preds = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![1.0, 2.0, 3.0, 4.0],
-        ).unwrap();
-        let targets = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![1.0, 2.0, 3.0, 4.0],
-        ).unwrap();
+        let preds = ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        let targets =
+            ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
         mse.update(&preds, &targets);
         assert!((mse.compute() - 0.0).abs() < 1e-6);
@@ -414,14 +413,9 @@ mod tests {
     fn test_mae() {
         let mut mae = MeanAbsoluteError::new();
 
-        let preds = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![1.0, 2.0, 3.0, 4.0],
-        ).unwrap();
-        let targets = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![2.0, 3.0, 4.0, 5.0],
-        ).unwrap();
+        let preds = ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        let targets =
+            ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![2.0, 3.0, 4.0, 5.0]).unwrap();
 
         mae.update(&preds, &targets);
         assert!((mae.compute() - 1.0).abs() < 1e-6);
@@ -431,14 +425,9 @@ mod tests {
     fn test_rmse() {
         let mut rmse = RootMeanSquaredError::new();
 
-        let preds = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![1.0, 2.0, 3.0, 4.0],
-        ).unwrap();
-        let targets = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![2.0, 3.0, 4.0, 5.0],
-        ).unwrap();
+        let preds = ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        let targets =
+            ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![2.0, 3.0, 4.0, 5.0]).unwrap();
 
         rmse.update(&preds, &targets);
         assert!((rmse.compute() - 1.0).abs() < 1e-6);
@@ -448,15 +437,10 @@ mod tests {
     fn test_r_squared() {
         let mut r2 = RSquared::new();
 
-        // Идеальное совпадение => R² = 1
-        let preds = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![1.0, 2.0, 3.0, 4.0],
-        ).unwrap();
-        let targets = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![1.0, 2.0, 3.0, 4.0],
-        ).unwrap();
+        // Perfect match => R² = 1
+        let preds = ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        let targets =
+            ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
         r2.update(&preds, &targets);
         assert!((r2.compute() - 1.0).abs() < 1e-6);
@@ -466,14 +450,10 @@ mod tests {
     fn test_max_error() {
         let mut max_err = MaxError::new();
 
-        let preds = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![1.0, 2.0, 3.0, 10.0],
-        ).unwrap();
-        let targets = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![1.0, 2.0, 3.0, 4.0],
-        ).unwrap();
+        let preds =
+            ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![1.0, 2.0, 3.0, 10.0]).unwrap();
+        let targets =
+            ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
         max_err.update(&preds, &targets);
         assert!((max_err.compute() - 6.0).abs() < 1e-6);

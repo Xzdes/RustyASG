@@ -1,32 +1,32 @@
-// --- Файл: src/data/sampler.rs ---
+// --- File: src/data/sampler.rs ---
 
-//! Стратегии сэмплирования данных для DataLoader.
+//! Data sampling strategies for DataLoader.
 
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 
-/// Трейт для сэмплеров - генераторов индексов.
+/// Trait for samplers - generators of indices.
 pub trait Sampler: Iterator<Item = usize> {
-    /// Возвращает общее количество образцов.
+    /// Returns the total number of samples.
     fn len(&self) -> usize;
 
-    /// Проверяет, пуст ли сэмплер.
+    /// Returns whether the sampler is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Сбрасывает сэмплер в начальное состояние.
+    /// Resets the sampler to its initial state.
     fn reset(&mut self);
 }
 
-/// Последовательный сэмплер - возвращает индексы по порядку.
+/// Sequential sampler - returns indices in order.
 pub struct SequentialSampler {
     len: usize,
     current: usize,
 }
 
 impl SequentialSampler {
-    /// Создает последовательный сэмплер для датасета заданного размера.
+    /// Creates a sequential sampler for a dataset of the given size.
     pub fn new(len: usize) -> Self {
         Self { len, current: 0 }
     }
@@ -56,7 +56,7 @@ impl Sampler for SequentialSampler {
     }
 }
 
-/// Случайный сэмплер - возвращает индексы в случайном порядке.
+/// Random sampler - returns indices in random order.
 pub struct RandomSampler {
     indices: Vec<usize>,
     current: usize,
@@ -64,7 +64,7 @@ pub struct RandomSampler {
 }
 
 impl RandomSampler {
-    /// Создает случайный сэмплер для датасета заданного размера.
+    /// Creates a random sampler for a dataset of the given size.
     pub fn new(len: usize) -> Self {
         let mut sampler = Self {
             indices: (0..len).collect(),
@@ -75,7 +75,7 @@ impl RandomSampler {
         sampler
     }
 
-    /// Создает случайный сэмплер с фиксированным seed для воспроизводимости.
+    /// Creates a random sampler with a fixed seed for reproducibility.
     pub fn with_seed(len: usize, seed: u64) -> Self {
         let mut sampler = Self {
             indices: (0..len).collect(),
@@ -91,7 +91,7 @@ impl RandomSampler {
             let mut rng = rand::rngs::StdRng::seed_from_u64(s);
             self.indices.shuffle(&mut rng);
         } else {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             self.indices.shuffle(&mut rng);
         }
     }
@@ -122,7 +122,7 @@ impl Sampler for RandomSampler {
     }
 }
 
-/// Батч-сэмплер - группирует индексы в батчи.
+/// Batch sampler - groups indices into batches.
 pub struct BatchSampler<S: Sampler> {
     sampler: S,
     batch_size: usize,
@@ -130,13 +130,13 @@ pub struct BatchSampler<S: Sampler> {
 }
 
 impl<S: Sampler> BatchSampler<S> {
-    /// Создает батч-сэмплер.
+    /// Creates a batch sampler.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `sampler` - Внутренний сэмплер для генерации индексов
-    /// * `batch_size` - Размер батча
-    /// * `drop_last` - Отбросить последний неполный батч
+    /// * `sampler` - Inner sampler that generates indices.
+    /// * `batch_size` - Batch size.
+    /// * `drop_last` - Whether to drop the last incomplete batch.
     pub fn new(sampler: S, batch_size: usize, drop_last: bool) -> Self {
         Self {
             sampler,
@@ -145,17 +145,17 @@ impl<S: Sampler> BatchSampler<S> {
         }
     }
 
-    /// Возвращает количество батчей.
+    /// Returns the number of batches.
     pub fn num_batches(&self) -> usize {
         let n = self.sampler.len();
         if self.drop_last {
             n / self.batch_size
         } else {
-            (n + self.batch_size - 1) / self.batch_size
+            n.div_ceil(self.batch_size)
         }
     }
 
-    /// Сбрасывает сэмплер.
+    /// Resets the sampler.
     pub fn reset(&mut self) {
         self.sampler.reset();
     }
@@ -187,7 +187,7 @@ impl<S: Sampler> Iterator for BatchSampler<S> {
     }
 }
 
-/// Weighted Random Sampler - сэмплирование с весами.
+/// Weighted Random Sampler - sampling with weights.
 pub struct WeightedRandomSampler {
     weights: Vec<f32>,
     cumulative_weights: Vec<f32>,
@@ -199,13 +199,13 @@ pub struct WeightedRandomSampler {
 }
 
 impl WeightedRandomSampler {
-    /// Создает weighted sampler.
+    /// Creates a weighted sampler.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `weights` - Веса для каждого образца
-    /// * `num_samples` - Количество образцов для генерации
-    /// * `replacement` - Сэмплирование с возвращением
+    /// * `weights` - Weights for each sample.
+    /// * `num_samples` - Number of samples to generate.
+    /// * `replacement` - Whether to sample with replacement.
     pub fn new(weights: Vec<f32>, num_samples: usize, replacement: bool) -> Self {
         let total: f32 = weights.iter().sum();
         let normalized: Vec<f32> = weights.iter().map(|w| w / total).collect();
@@ -228,7 +228,7 @@ impl WeightedRandomSampler {
         }
     }
 
-    /// Устанавливает seed для воспроизводимости.
+    /// Sets a seed for reproducibility.
     pub fn with_seed(mut self, seed: u64) -> Self {
         self.seed = Some(seed);
         self
@@ -244,7 +244,7 @@ impl WeightedRandomSampler {
     }
 
     fn sample_one_no_replacement(&mut self, r: f32) -> Option<usize> {
-        // Без возвращения - нужно пересчитать веса
+        // Without replacement - the weights must be recomputed.
         let available: Vec<(usize, f32)> = self
             .weights
             .iter()
@@ -291,7 +291,7 @@ impl Iterator for WeightedRandomSampler {
             let mut rng = rand::rngs::StdRng::seed_from_u64(s + self.current as u64);
             rng.random()
         } else {
-            rand::thread_rng().random()
+            rand::rng().random()
         };
 
         let result = if self.replacement {
@@ -339,7 +339,7 @@ mod tests {
         let indices: Vec<_> = sampler.by_ref().collect();
         assert_eq!(indices.len(), 5);
 
-        // Проверяем что все индексы уникальны
+        // Verify that all indices are unique.
         let mut sorted = indices.clone();
         sorted.sort();
         assert_eq!(sorted, vec![0, 1, 2, 3, 4]);
@@ -353,7 +353,7 @@ mod tests {
         let batches: Vec<_> = batch_sampler.by_ref().collect();
         assert_eq!(batches.len(), 4);
         assert_eq!(batches[0], vec![0, 1, 2]);
-        assert_eq!(batches[3], vec![9]); // Последний неполный батч
+        assert_eq!(batches[3], vec![9]); // Last incomplete batch
     }
 
     #[test]
@@ -362,6 +362,6 @@ mod tests {
         let mut batch_sampler = BatchSampler::new(sampler, 3, true);
 
         let batches: Vec<_> = batch_sampler.by_ref().collect();
-        assert_eq!(batches.len(), 3); // Последний неполный батч отброшен
+        assert_eq!(batches.len(), 3); // Last incomplete batch dropped
     }
 }

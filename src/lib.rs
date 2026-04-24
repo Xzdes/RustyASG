@@ -1,3 +1,19 @@
+// Clippy lints suppressed intentionally for the entire crate:
+//
+// - `too_many_arguments`: convolution-style APIs legitimately take many tuple
+//   parameters (stride, padding, dilation, groups...). Wrapping them in
+//   config structs hurts ergonomics more than it helps.
+// - `type_complexity`: the backend trait returns
+//   `(Vec<DeviceData>, Memo<DeviceData>)` which clippy flags, but hiding it
+//   behind a type alias makes navigation harder.
+// - `should_implement_trait`: internal `add` method on the gradient builder
+//   has a different signature than `std::ops::Add::add` on purpose.
+#![allow(
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::should_implement_trait
+)]
+
 //! # RustyASG: Graph-based Deep Learning Engine in Rust
 //!
 //! **RustyASG** is a modern experimental deep learning framework written in Rust.

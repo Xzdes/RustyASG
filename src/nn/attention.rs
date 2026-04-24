@@ -17,7 +17,6 @@
 //! let output = mha.forward_with_mask(&input, &input, &input, Some(&causal_mask), None);
 //! ```
 
-use crate::asg::{NodeType, Value};
 use crate::nn::{Linear, Module};
 use crate::tensor::{GraphContext, Tensor};
 use ndarray::{arr0, ArrayD, IxDyn};
@@ -122,19 +121,15 @@ impl MultiHeadAttention {
         let head_dim = embed_dim / num_heads;
         let scale = 1.0 / (head_dim as f32).sqrt();
 
-        let w_q_name = format!("{}.w_q", name);
-        let w_k_name = format!("{}.w_k", name);
-        let w_v_name = format!("{}.w_v", name);
-        let w_o_name = format!("{}.w_o", name);
-
+        // All four projections are square: [embed_dim, embed_dim].
         Self {
             num_heads,
             head_dim,
             embed_dim,
-            w_q: Linear::new(context, &w_q_name),
-            w_k: Linear::new(context, &w_k_name),
-            w_v: Linear::new(context, &w_v_name),
-            w_o: Linear::new(context, &w_o_name),
+            w_q: Linear::new(context, &format!("{}.w_q", name), embed_dim, embed_dim),
+            w_k: Linear::new(context, &format!("{}.w_k", name), embed_dim, embed_dim),
+            w_v: Linear::new(context, &format!("{}.w_v", name), embed_dim, embed_dim),
+            w_o: Linear::new(context, &format!("{}.w_o", name), embed_dim, embed_dim),
             scale,
             context: Rc::clone(context),
         }
@@ -171,11 +166,7 @@ impl MultiHeadAttention {
         let scores = query.dot(&k_transposed);
 
         // Scale
-        let scale_tensor = Tensor::new_literal(
-            &self.context,
-            arr0(self.scale).into_dyn(),
-            "scale",
-        );
+        let scale_tensor = Tensor::new_literal(&self.context, arr0(self.scale).into_dyn(), "scale");
         let scores_scaled = &scores * &scale_tensor;
 
         // Apply mask (if provided)
@@ -226,12 +217,8 @@ impl MultiHeadAttention {
         let combined_mask = self.combine_masks(attn_mask, key_padding_mask);
 
         // Scaled dot-product attention
-        let attention_output = self.scaled_dot_product_attention(
-            &q_heads,
-            &k_heads,
-            &v_heads,
-            combined_mask.as_ref(),
-        );
+        let attention_output =
+            self.scaled_dot_product_attention(&q_heads, &k_heads, &v_heads, combined_mask.as_ref());
 
         // Combine heads: [batch, num_heads, seq_q, head_dim] -> [batch, seq_q, embed_dim]
         let concatenated = self.combine_heads_dynamic(&attention_output);
@@ -335,21 +322,13 @@ impl MultiHeadAttention {
 
     /// Helper function to split tensor into heads.
     fn split_heads(&self, x: &Tensor) -> Tensor {
-        x.reshape(vec![
-            1,
-            1,
-            self.num_heads as i64,
-            self.head_dim as i64,
-        ])
-        .transpose(1, 2)
+        x.reshape(vec![1, 1, self.num_heads as i64, self.head_dim as i64])
+            .transpose(1, 2)
     }
 
     /// Helper function to merge heads.
     fn combine_heads(&self, x: &Tensor) -> Tensor {
-        x.transpose(1, 2).reshape(vec![
-            1,
-            self.embed_dim as i64,
-        ])
+        x.transpose(1, 2).reshape(vec![1, self.embed_dim as i64])
     }
 }
 
@@ -367,11 +346,7 @@ impl Module for MultiHeadAttention {
         let k_heads_transposed = k_heads.transpose(2, 3);
         let scores = q_heads.dot(&k_heads_transposed);
 
-        let scale_tensor = Tensor::new_literal(
-            &self.context,
-            arr0(self.scale).into_dyn(),
-            "scale",
-        );
+        let scale_tensor = Tensor::new_literal(&self.context, arr0(self.scale).into_dyn(), "scale");
         let scores_scaled = &scores * &scale_tensor;
 
         let attention_weights = scores_scaled.softmax();
@@ -441,6 +416,7 @@ pub fn create_padding_mask_from_ids(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asg::{NodeType, Value};
 
     #[test]
     fn test_mha_creation() {

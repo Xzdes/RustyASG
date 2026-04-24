@@ -1,68 +1,68 @@
-// --- Файл: src/data/dataset.rs ---
+// --- File: src/data/dataset.rs ---
 
-//! Определение трейта Dataset и базовые реализации.
+//! The `Dataset` trait and baseline implementations.
 
 use ndarray::ArrayD;
 use std::sync::Arc;
 
-/// Трейт для источников данных.
+/// Trait for data sources.
 ///
-/// Каждый датасет должен уметь:
-/// - Возвращать количество элементов
-/// - Возвращать элемент по индексу
+/// Every dataset must be able to:
+/// - Return the number of elements
+/// - Return an element by index
 pub trait Dataset: Send + Sync {
-    /// Тип элемента данных (features)
+    /// Feature item type.
     type Item;
-    /// Тип метки (label)
+    /// Label type.
     type Label;
 
-    /// Возвращает количество элементов в датасете.
+    /// Returns the number of elements in the dataset.
     fn len(&self) -> usize;
 
-    /// Проверяет, пуст ли датасет.
+    /// Returns whether the dataset is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Возвращает элемент и метку по индексу.
+    /// Returns the item and label at the given index.
     fn get(&self, index: usize) -> Option<(Self::Item, Self::Label)>;
 
-    /// Возвращает только элемент данных по индексу.
+    /// Returns only the feature item at the given index.
     fn get_item(&self, index: usize) -> Option<Self::Item> {
         self.get(index).map(|(item, _)| item)
     }
 
-    /// Возвращает только метку по индексу.
+    /// Returns only the label at the given index.
     fn get_label(&self, index: usize) -> Option<Self::Label> {
         self.get(index).map(|(_, label)| label)
     }
 }
 
-/// Датасет, хранящий данные в памяти.
+/// Dataset that stores all data in memory.
 ///
-/// Простейшая реализация датасета для работы с данными,
-/// которые полностью помещаются в оперативную память.
+/// The simplest dataset implementation, suitable for data that fits
+/// entirely in RAM.
 #[derive(Debug, Clone)]
 pub struct InMemoryDataset {
-    /// Признаки (features) - каждая строка это один образец
+    /// Features - each row is one sample.
     features: Arc<ArrayD<f32>>,
-    /// Метки (labels) - каждая строка соответствует образцу
+    /// Labels - each row corresponds to a sample.
     labels: Arc<ArrayD<f32>>,
-    /// Количество образцов
+    /// Number of samples.
     num_samples: usize,
 }
 
 impl InMemoryDataset {
-    /// Создает новый датасет из массивов признаков и меток.
+    /// Creates a new dataset from feature and label arrays.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `features` - Массив признаков формы [num_samples, ...]
-    /// * `labels` - Массив меток формы [num_samples, ...]
+    /// * `features` - Feature array of shape `[num_samples, ...]`.
+    /// * `labels` - Label array of shape `[num_samples, ...]`.
     ///
-    /// # Паника
+    /// # Panics
     ///
-    /// Паникует если количество образцов в features и labels не совпадает.
+    /// Panics when the number of samples in `features` and `labels` does not match.
     pub fn new(features: ArrayD<f32>, labels: ArrayD<f32>) -> Self {
         let num_samples = features.shape()[0];
         assert_eq!(
@@ -78,7 +78,7 @@ impl InMemoryDataset {
         }
     }
 
-    /// Создает датасет только с признаками (для unsupervised learning).
+    /// Creates a dataset containing only features (for unsupervised learning).
     pub fn from_features(features: ArrayD<f32>) -> Self {
         let num_samples = features.shape()[0];
         let labels = ArrayD::zeros(ndarray::IxDyn(&[num_samples]));
@@ -89,17 +89,17 @@ impl InMemoryDataset {
         }
     }
 
-    /// Возвращает форму признаков (без batch dimension).
+    /// Returns the feature shape (without the batch dimension).
     pub fn feature_shape(&self) -> Vec<usize> {
         self.features.shape()[1..].to_vec()
     }
 
-    /// Возвращает форму меток (без batch dimension).
+    /// Returns the label shape (without the batch dimension).
     pub fn label_shape(&self) -> Vec<usize> {
         self.labels.shape()[1..].to_vec()
     }
 
-    /// Возвращает срез признаков по индексам.
+    /// Returns a slice of features for the given indices.
     pub fn get_features_batch(&self, indices: &[usize]) -> ArrayD<f32> {
         let feature_shape = self.feature_shape();
         let mut batch_shape = vec![indices.len()];
@@ -115,7 +115,7 @@ impl InMemoryDataset {
         batch
     }
 
-    /// Возвращает срез меток по индексам.
+    /// Returns a slice of labels for the given indices.
     pub fn get_labels_batch(&self, indices: &[usize]) -> ArrayD<f32> {
         let label_shape = self.label_shape();
         let mut batch_shape = vec![indices.len()];
@@ -152,9 +152,9 @@ impl Dataset for InMemoryDataset {
     }
 }
 
-/// Датасет с применением функции преобразования.
+/// Dataset that applies transformation functions.
 ///
-/// Позволяет применять трансформации к данным на лету.
+/// Allows transformations to be applied to data on the fly.
 pub struct MapDataset<D, F, G>
 where
     D: Dataset,
@@ -172,7 +172,7 @@ where
     F: Fn(D::Item) -> D::Item + Send + Sync,
     G: Fn(D::Label) -> D::Label + Send + Sync,
 {
-    /// Создает новый MapDataset с преобразованиями.
+    /// Creates a new `MapDataset` with the given transformations.
     pub fn new(dataset: D, item_transform: F, label_transform: G) -> Self {
         Self {
             inner: dataset,
@@ -196,13 +196,13 @@ where
     }
 
     fn get(&self, index: usize) -> Option<(Self::Item, Self::Label)> {
-        self.inner.get(index).map(|(item, label)| {
-            ((self.item_transform)(item), (self.label_transform)(label))
-        })
+        self.inner
+            .get(index)
+            .map(|(item, label)| ((self.item_transform)(item), (self.label_transform)(label)))
     }
 }
 
-/// Датасет, объединяющий несколько датасетов.
+/// Dataset that concatenates several datasets.
 pub struct ConcatDataset<D: Dataset> {
     datasets: Vec<D>,
     cumulative_sizes: Vec<usize>,
@@ -210,7 +210,7 @@ pub struct ConcatDataset<D: Dataset> {
 }
 
 impl<D: Dataset> ConcatDataset<D> {
-    /// Создает объединенный датасет из списка датасетов.
+    /// Creates a concatenated dataset from a list of datasets.
     pub fn new(datasets: Vec<D>) -> Self {
         let mut cumulative_sizes = Vec::with_capacity(datasets.len());
         let mut total = 0;
@@ -227,7 +227,7 @@ impl<D: Dataset> ConcatDataset<D> {
         }
     }
 
-    /// Находит индекс датасета и локальный индекс для глобального индекса.
+    /// Finds the dataset index and local index for a given global index.
     fn find_dataset(&self, index: usize) -> Option<(usize, usize)> {
         if index >= self.total_len {
             return None;
@@ -258,14 +258,14 @@ impl<D: Dataset> Dataset for ConcatDataset<D> {
     }
 }
 
-/// Датасет с подмножеством индексов.
+/// Dataset view over a subset of indices.
 pub struct SubsetDataset<D: Dataset> {
     inner: D,
     indices: Vec<usize>,
 }
 
 impl<D: Dataset> SubsetDataset<D> {
-    /// Создает подмножество датасета по указанным индексам.
+    /// Creates a subset of the dataset over the specified indices.
     pub fn new(dataset: D, indices: Vec<usize>) -> Self {
         Self {
             inner: dataset,
@@ -288,15 +288,15 @@ impl<D: Dataset> Dataset for SubsetDataset<D> {
     }
 }
 
-/// Разделяет датасет на train/validation/test части.
-pub fn train_test_split<D: Dataset>(
+/// Splits a dataset into train/validation/test subsets.
+pub fn train_test_split<D>(
     dataset: D,
     train_ratio: f32,
     shuffle: bool,
     seed: Option<u64>,
 ) -> (SubsetDataset<D>, SubsetDataset<D>)
 where
-    D: Clone,
+    D: Dataset + Clone,
 {
     let n = dataset.len();
     let train_size = (n as f32 * train_ratio) as usize;
@@ -311,7 +311,7 @@ where
             let mut rng = rand::rngs::StdRng::seed_from_u64(s);
             indices.shuffle(&mut rng);
         } else {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             indices.shuffle(&mut rng);
         }
     }
@@ -333,12 +333,13 @@ mod tests {
     fn test_in_memory_dataset() {
         let features = ArrayD::from_shape_vec(
             ndarray::IxDyn(&[4, 3]),
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
-        ).unwrap();
-        let labels = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4, 1]),
-            vec![0.0, 1.0, 0.0, 1.0],
-        ).unwrap();
+            vec![
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
+        )
+        .unwrap();
+        let labels =
+            ArrayD::from_shape_vec(ndarray::IxDyn(&[4, 1]), vec![0.0, 1.0, 0.0, 1.0]).unwrap();
 
         let dataset = InMemoryDataset::new(features, labels);
 
@@ -356,7 +357,8 @@ mod tests {
         let features = ArrayD::from_shape_vec(
             ndarray::IxDyn(&[4, 2]),
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-        ).unwrap();
+        )
+        .unwrap();
         let labels = ArrayD::zeros(ndarray::IxDyn(&[4]));
 
         let dataset = InMemoryDataset::new(features, labels);

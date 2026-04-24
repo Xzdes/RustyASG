@@ -1,171 +1,216 @@
 ![RustyASG Logo](logo.png)
 
-# RustyASG: Графовый движок для глубокого обучения на Rust
+# RustyASG — a graph-based deep learning engine in Rust
 
-**RustyASG** — это современный экспериментальный фреймворк для глубокого обучения на Rust с уникальной возможностью **интерактивной визуализации графа в реальном времени**. Его ключевая особенность — архитектура, построенная вокруг **Абстрактного Семантического Графа (ASG)**, которая обеспечивает максимальную производительность, гибкость и беспрецедентный контроль над моделью.
+**RustyASG** is a modern, experimental deep learning framework written in pure
+Rust with a unique feature: **live, interactive graph visualization**. Its
+defining idea is an architecture built around an **Abstract Semantic Graph
+(ASG)** — a symbolic representation of your computation that can be analysed,
+differentiated, optimised and executed on multiple backends.
 
-Вместо немедленного выполнения операций (eager execution), как в PyTorch, RustyASG сначала строит полный граф вычислений. Этот граф затем может быть статически проанализирован, оптимизирован и выполнен на различных бэкендах, включая **высокопроизводительные вычисления на GPU** с помощью `wgpu`.
+Unlike eager-execution frameworks (PyTorch, TensorFlow 2.x), RustyASG first
+*builds* a full computation graph, then runs static analysis, autograd, and
+finally hands the result to a CPU or GPU backend. The GPU backend uses
+[`wgpu`](https://wgpu.rs), so the same code runs on Vulkan, Metal, DX12 and
+WebGPU.
 
-[![Лицензия: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+> Russian version of this document: [README.ru.md](README.ru.md).
+
+[![Crates.io](https://img.shields.io/crates/v/rustyasg.svg)](https://crates.io/crates/rustyasg)
+[![Documentation](https://docs.rs/rustyasg/badge.svg)](https://docs.rs/rustyasg)
+[![CI](https://github.com/Xzdes/RustyAsg/actions/workflows/ci.yml/badge.svg)](https://github.com/Xzdes/RustyAsg/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Rust 1.75+](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 ---
 
-## 🔥 Философия проекта
+## Design principles
 
-RustyASG придерживается нескольких ключевых принципов:
+- **Performance through graphs.** Define-then-run makes global optimisations
+  (kernel fusion, static memory planning) possible in a way eager
+  frameworks cannot match.
+- **Rust safety.** No UB, no data races, no segfaults — the properties that
+  matter most during long training runs.
+- **Control and transparency.** The computation graph is inspectable,
+  modifiable, and — critically — **visualisable in real time**. Debugging
+  and understanding a model become dramatically easier.
+- **Educational value.** A clear, readable reference for how modern DL
+  frameworks actually work under the hood, from the symbolic tensor API
+  all the way down to WGSL shaders and graph-level autograd.
 
-*   🚀 **Производительность через графы:** Подход "define-then-run" позволяет проводить глобальные оптимизации, такие как слияние операций (kernel fusion) и статическое распределение памяти, что недостижимо для фреймворков с немедленным выполнением.
-*   🔒 **Безопасность и надежность Rust:** Использование Rust гарантирует безопасность работы с памятью и параллелизм без гонок данных, что критически важно для сложных вычислительных систем.
-*   🔬 **Полный контроль и прозрачность:** Вы имеете полный контроль над графом вычислений. Его можно инспектировать, изменять и, самое главное, **визуализировать** до и во время запуска, что делает процесс отладки и понимания модели значительно проще.
-*   🎓 **Образовательный инструмент:** Проект является отличным примером того, как современные deep learning фреймворки устроены "под капотом", от символьного API до GPU-бэкенда и автоматического дифференцирования.
+## What's inside
 
-## ✅ Ключевые возможности
+- **Declarative layer API (v0.3+).** `Linear::new(ctx, "fc1", 784, 128)`
+  automatically registers the layer's parameter shapes and initialisers
+  with the graph context. `GraphContext::init_parameters()` samples the
+  weights. No more manual `HashMap<String, Shape>`, no more string-matching
+  layer names in user code.
+- **Built-in interactive graph visualiser.** A native `egui` window renders
+  your graph in real time. Pure Rust, zero external dependencies — no
+  Graphviz, no web stack.
+- **Graph-to-graph autograd.** Gradient computation itself is an ASG — it
+  can be analysed, optimised, and visualised the same way as the forward
+  graph.
+- **Two backends:**
+  - ✅ **CPU** — complete reference implementation on `ndarray`.
+  - ✅ **GPU (wgpu)** — LayerNorm (fwd + bwd), Conv2d (fwd + bwd), Pooling
+    (Max/Avg/Adaptive), Embedding, ConvTranspose2d, Slice/Concat.
+    `TransformerBlock` trains end-to-end on GPU. 46 parity tests verify
+    every GPU op matches the CPU reference to `1e-5`.
+- **Static analysis.** `ShapeInference` validates the graph before
+  execution, catching shape errors at graph-build time rather than at
+  runtime deep inside a training loop.
+- **Transformers and CNNs covered:** Multi-Head Attention with causal and
+  padding masks, LayerNorm, FeedForward, Conv2d / ConvTranspose2d, pooling
+  layers, positional encodings (Sinusoidal, Learned, **full RoPE**, ALiBi),
+  and Slice/Concat primitives with autograd.
+- **Training stack:** SGD / Adam / AdamW / RMSprop, five LR schedulers,
+  gradient clipping, 14 loss functions, 9 standard weight initialisers
+  (Xavier / Kaiming / Normal / …).
+- **Data & metrics:** `Dataset` / `DataLoader` with samplers and
+  transforms, classification and regression metrics, `EarlyStopping`.
+- **Serialization:** SafeTensors plus a rotating checkpoint manager.
+- **CI/CD:** GitHub Actions matrix across Linux / Windows / macOS. Strict
+  `cargo fmt`, `cargo clippy -- -D warnings`, strict `cargo doc`, and the
+  full 141-test suite.
+- **crates.io ready:** complete metadata, thin-LTO release profile,
+  `docs.rs` configuration, tight published-crate size.
 
-- **Динамическое построение графа:** Легковесный `Tensor` API позволяет интуитивно строить граф вычислений.
-- **✨ Встроенная интерактивная визуализация графа:** Запускайте вычисления вместе с нативным GUI-окном, которое отрисовывает структуру вашего графа в реальном времени. Полностью на Rust (`egui`), **без внешних зависимостей** (не требуется установка Graphviz).
-- **Автоматическое дифференцирование:** Мощный механизм "граф-в-граф", который генерирует новый ASG для вычисления градиентов.
-- **Поддержка нескольких бэкендов:**
-    - ✅ **CPU-бэкенд:** Полностью функциональная эталонная реализация на `ndarray`.
-    - ✅ **GPU-бэкенд:** Высокопроизводительное выполнение на GPU через `wgpu` (WebGPU).
-- **Статический анализ:** Встроенный механизм вывода размерностей (`Shape Inference`) для проверки корректности графа до его выполнения.
-- **Современные архитектуры:** Реализованы все необходимые блоки для построения полноценной модели **Transformer**.
+## A 20-line XOR (v0.3+)
 
----
+```rust
+use rustyasg::losses::mse_loss;
+use rustyasg::nn::{Linear, Module};
+use rustyasg::tensor::{GraphContext, Tensor};
+use std::{cell::RefCell, rc::Rc};
 
-## 🏗️ Архитектура
+let ctx = Rc::new(RefCell::new(GraphContext::new()));
 
-Архитектура фреймворка строго разделена на независимые модули, взаимодействующие через четко определенные интерфейсы.
+let x      = Tensor::new_input(&ctx, "x");
+let y_true = Tensor::new_input(&ctx, "y_true");
+
+// Every layer self-registers its parameter shapes + initialisers
+// on the GraphContext. No user-side shape bookkeeping.
+let fc1 = Linear::new(&ctx, "fc1", 2, 8);
+let fc2 = Linear::new(&ctx, "fc2", 8, 1);
+
+let y_pred = fc2.forward(&fc1.forward(&x).relu()).sigmoid();
+let loss   = mse_loss(&y_pred, &y_true);
+
+// Training loop — see examples/xor.rs for the full version.
+```
+
+## Architecture
 
 ```
 ┌───────────────────────────────────┐
-│     Пользовательский API (Tensor) │
+│     User-facing API (Tensor)      │
 └─────────────────┬─────────────────┘
-                  │ (строит граф)
-                  V
+                  │ (builds the graph)
+                  ▼
 ┌───────────────────────────────────┐
-│Абстрактный Семантический Граф (ASG) ◀───┐ (отправляется в GUI)
-│ (описание вычислений)             │       │
-└─────────────────┬─────────────────┘       │
-                  │                         │
-        ┌─────────┴─────────┐               │
-        │                   │               │
-        V                   V               V
-┌───────┴───────┐     ┌─────┴───────┐   ┌───┴───┐
-│ Autograd      │     │ Runtime     │   │ GUI   │
-│ (граф -> граф)│     │ (исполнение)│   │ Viewer│
-└───────────────┘     └──────┬──────┘   └───────┘
-                               │
-                     ┌─────────┴─────────┐
-                     │                   │
-                     V                   V
-               ┌─────┴─────┐       ┌─────┴─────┐
-               │CPU Backend│       │GPU Backend│
-               └───────────┘       └───────────┘
+│    Abstract Semantic Graph (ASG)  │◀──┐ (sent to the GUI)
+│       (symbolic computation)      │   │
+└─────────────────┬─────────────────┘   │
+                  │                     │
+        ┌─────────┼─────────┐           │
+        ▼         ▼         ▼           │
+  ┌─────────┐ ┌───────┐ ┌────────┐      │
+  │Autograd │ │Runtime│ │ Graph  │──────┘
+  │(graph → │ │       │ │Viewer  │
+  │ graph)  │ │       │ │(egui)  │
+  └─────────┘ └───┬───┘ └────────┘
+                  │
+            ┌─────┴─────┐
+            ▼           ▼
+       ┌────────┐  ┌────────┐
+       │  CPU   │  │  GPU   │
+       │Backend │  │(wgpu)  │
+       └────────┘  └────────┘
 ```
 
----
+## Getting started
 
-## 🚀 Начало работы
+**Prerequisites:** Rust 1.75+ (`rustup install stable`).
 
-### Требования
-*   [Rust](https://www.rust-lang.org/tools/install) (версия 1.70 или новее)
-*   `cargo` (обычно устанавливается вместе с Rust)
-
-### Установка и запуск
-
-1.  **Клонируйте репозиторий:**
-    ```bash
-    git clone https://github.com/Xzdes/RustyAsg.git
-    cd RustyAsg
-    ```
-
-2.  **Выберите режим запуска:**
-
-    *   **А) Стандартный запуск (только вычисления в консоли):**
-        ```bash
-        cargo run --release
-        ```
-        *Использование флага `--release` настоятельно рекомендуется для получения максимальной производительности.*
-
-    *   **Б) Запуск с интерактивной визуализацией:**
-        ```bash
-        cargo run --release -- --visualize
-        ```
-        **ВАЖНО:** Двойной дефис (`--`) необходим, чтобы передать флаг `--visualize` вашей программе, а не `cargo`.
-
----
-
-## ✨ Демонстрация
-
-При запуске с флагом `--visualize` вы увидите два окна:
-1.  **Консоль**, где будет отображаться лог построения графа и процесс обучения.
-2.  **Интерактивное окно визуализатора**, где будет отрисован ваш граф. Вы можете перемещать вид, зажав левую кнопку мыши.
-
-#### Консольный вывод:
 ```bash
-[GUI] Запуск GUI в основном потоке...
-[COMPUTATION] Запуск вычислительного потока...
---- Демонстрация полного цикла обучения RustyASG ---
-[Config] Backend: GPU (wgpu)
+git clone https://github.com/Xzdes/RustyAsg.git
+cd RustyAsg
 
-[1] Граф прямого прохода успешно построен.
-[2] Анализ форм (Shape Inference) для прямого графа завершен.
-[3] Граф градиентов построен и проанализирован.
+# Train the bundled TransformerBlock demo (CPU by default)
+cargo run --release
 
-[+] Отправка графа прямого прохода в окно визуализации...
-[4] Данные, веса и оптимизатор инициализированы.
+# Same demo on the GPU backend via wgpu
+cargo run --release -- --gpu
 
---- НАЧАЛО ЦИКЛА ОБУЧЕНИЯ ---
+# Same demo with the live egui graph visualiser
+cargo run --release -- --visualize
 
-Эпоха: 1 , Потери (Loss): 1.528345
-Эпоха: 2 , Потери (Loss): 1.377164
-...
-Эпоха: 15, Потери (Loss): 0.370134
-
---- ОБУЧЕНИЕ ЗАВЕРШЕНО ЗА 3.25s ---
+# Run one of the standalone examples
+cargo run --release --example xor                    # 2-layer MLP, solves XOR
+cargo run --release --example linear_regression      # y = wx + b
+cargo run --release --example pattern_recognition    # 4-class MLP, 100% accuracy
+cargo run --release --example mnist                  # MLP on synthetic MNIST, 100%
+cargo run --release --example cnn_classifier         # Conv2d + Pool + Linear, 100%
+cargo run --release --example transformer_classifier # attention-style classifier
 ```
 
-#### Окно визуализатора:
-*(Замените `screenshot.png` на путь к вашему скриншоту)*
-![Скриншот Визуализатора RustyASG](screenshot.png)
+## Examples
 
----
+| File | Architecture | Task | Result |
+|------|-------------|------|--------|
+| [`xor.rs`](examples/xor.rs) | MLP 2→8→1 | XOR | loss < 0.0001 |
+| [`linear_regression.rs`](examples/linear_regression.rs) | y = wx + b | learn y = 2x + 1 | error 0.0001 |
+| [`pattern_recognition.rs`](examples/pattern_recognition.rs) | MLP 64→32→16→4 | 4 image patterns | 100% |
+| [`mnist.rs`](examples/mnist.rs) | MLP 784→128→64→10 | synthetic MNIST | 100% |
+| [`cnn_classifier.rs`](examples/cnn_classifier.rs) | Conv2d + Pool + Linear | 3 classes, 8×8 | 100% |
+| [`transformer_classifier.rs`](examples/transformer_classifier.rs) | attention-like MLP | sequence patterns | converges |
 
-## 🗺️ Дорожная карта (Roadmap)
+## Testing
 
-Проект активно развивается. Вот некоторые из ключевых направлений для будущей работы:
+```bash
+cargo test --release                                         # full suite (141 tests)
+cargo test --release --lib                                   # unit tests only (87)
+cargo test --release --test grad_check                       # numerical grad check (8)
+cargo test --release --test gpu_backend -- --test-threads=1  # GPU↔CPU parity (46)
+```
 
-#### (High Priority)
-- [ ] **Исправить градиент для `LayerNorm`:** Градиент для параметров `gamma` и `beta` в `autograd` реализован некорректно и временно отключен в примере. Это главная задача для дальнейшей работы.
+**141 tests — all green:**
+- 87 library unit tests (activations, autograd, optimizers, data, metrics…)
+- 8 numerical gradient checks for LayerNorm and Conv2d backward rules
+- 46 GPU↔CPU parity tests — every GPU operation compared against the CPU
+  reference at `1e-5` tolerance
 
-#### (Core Improvements)
-- [ ] Расширить `autograd` для поддержки большего числа операций.
-- [ ] Реализовать более продвинутые оптимизаторы (`Adam`, `AdamW`).
-- [ ] Добавить поддержку батчей произвольного размера в API и бэкендах.
+## Roadmap
 
-#### (Визуализатор)
-- [ ] Добавить возможность переключения между графом прямого прохода и графом градиентов в GUI.
-- [ ] Отображать больше информации об узлах при наведении (например, точные значения констант).
-- [ ] Реализовать подсветку пути при клике на узел.
+See [ROADMAP.md](ROADMAP.md) for the full plan. In short:
 
-#### (Backend Optimizations)
-- [ ] **Kernel Fusion:** Реализовать проход оптимизации, который объединяет несколько последовательных операций в один кастомный WGSL-шейдер.
-- [ ] **Управление памятью:** Создать более умный аллокатор для GPU-буферов, чтобы переиспользовать память.
+- **v0.1 – v0.2** — ASG core, autograd, layer zoo, optimizers, SafeTensors,
+  wgpu backend for base operations.
+- **v0.3** — declarative layer API (`ParameterRegistry`), complete GPU
+  coverage (LayerNorm, Conv2d backward, pooling, embedding,
+  ConvTranspose2d, Slice/Concat), full RoPE, CI, clippy-clean, thin-LTO,
+  CNN classifier example.
+- **v0.5 (planned)** — kernel fusion, GPU buffer pool, mixed precision
+  (f16), inference-only mode, criterion benchmarks, tiny GPT / ViT
+  starters.
+- **v1.0** — production-ready API, published documentation, ONNX export,
+  WebAssembly target.
 
-## 🙌 Вклад в проект (Contributing)
+## Contributing
 
-Приветствую любой вклад в развитие RustyASG! Если вы хотите помочь, пожалуйста, ознакомьтесь с `CONTRIBUTING.md` (пока не создан) или просто:
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version:
 
-1.  Сделайте форк репозитория.
-2.  Создайте новую ветку для вашей фичи или исправления (`git checkout -b feature/my-new-feature`).
-3.  Внесите изменения и сделайте коммит (`git commit -am 'Add some feature'`).
-4.  Отправьте изменения в ваш форк (`git push origin feature/my-new-feature`).
-5.  Создайте Pull Request.
+1. Fork and branch: `git checkout -b feature/xyz`.
+2. `cargo build --release --all-targets`, `cargo test --release`.
+3. `cargo fmt --all` and
+   `cargo clippy --release --all-targets -- -D warnings`.
+4. Add an entry under `[Unreleased]` in `CHANGELOG.md`.
+5. Open a pull request.
 
-Также не стесняйтесь создавать **Issues** для сообщений об ошибках или предложений по улучшению.
+Bug reports and feature suggestions are welcome via GitHub Issues.
 
-## 📄 Лицензия
+## License
 
-Этот проект распространяется под лицензией MIT. Подробности смотрите в файле `LICENSE`.
+MIT — see [LICENSE](LICENSE).

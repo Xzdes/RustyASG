@@ -117,7 +117,11 @@ impl Sgd {
 }
 
 impl Optimizer for Sgd {
-    fn step(&mut self, parameters: &mut HashMap<String, Value>, gradients: &HashMap<String, Value>) {
+    fn step(
+        &mut self,
+        parameters: &mut HashMap<String, Value>,
+        gradients: &HashMap<String, Value>,
+    ) {
         for (param_name, grad_value) in gradients {
             if let (Some(Value::Tensor(param_value)), Value::Tensor(grad_tensor)) =
                 (parameters.get_mut(param_name), grad_value)
@@ -131,7 +135,8 @@ impl Optimizer for Sgd {
 
                 if self.momentum > 0.0 {
                     // Momentum update
-                    let v = self.velocity
+                    let v = self
+                        .velocity
                         .entry(param_name.clone())
                         .or_insert_with(|| ArrayD::zeros(param_value.shape()));
 
@@ -145,7 +150,7 @@ impl Optimizer for Sgd {
                 }
 
                 // param = param - lr * grad
-                ndarray::azip!((p in param_value, &g in &grad) *p = *p - self.lr * g);
+                ndarray::azip!((p in param_value, &g in &grad) *p -= self.lr * g);
             }
         }
     }
@@ -234,7 +239,11 @@ impl Adam {
 }
 
 impl Optimizer for Adam {
-    fn step(&mut self, parameters: &mut HashMap<String, Value>, gradients: &HashMap<String, Value>) {
+    fn step(
+        &mut self,
+        parameters: &mut HashMap<String, Value>,
+        gradients: &HashMap<String, Value>,
+    ) {
         self.t += 1;
         let t = self.t as f32;
 
@@ -254,10 +263,12 @@ impl Optimizer for Adam {
                 }
 
                 // Initialize or get m and v
-                let m = self.m
+                let m = self
+                    .m
                     .entry(param_name.clone())
                     .or_insert_with(|| ArrayD::zeros(param_value.shape()));
-                let v = self.v
+                let v = self
+                    .v
                     .entry(param_name.clone())
                     .or_insert_with(|| ArrayD::zeros(param_value.shape()));
 
@@ -273,7 +284,7 @@ impl Optimizer for Adam {
 
                 // param = param - lr * m_hat / (sqrt(v_hat) + eps)
                 ndarray::azip!((p in param_value, &mh in &m_hat, &vh in &v_hat) {
-                    *p = *p - self.lr * mh / (vh.sqrt() + self.eps);
+                    *p -= self.lr * mh / (vh.sqrt() + self.eps);
                 });
             }
         }
@@ -356,7 +367,11 @@ impl AdamW {
 }
 
 impl Optimizer for AdamW {
-    fn step(&mut self, parameters: &mut HashMap<String, Value>, gradients: &HashMap<String, Value>) {
+    fn step(
+        &mut self,
+        parameters: &mut HashMap<String, Value>,
+        gradients: &HashMap<String, Value>,
+    ) {
         self.t += 1;
         let t = self.t as f32;
 
@@ -372,15 +387,17 @@ impl Optimizer for AdamW {
                 // Decoupled weight decay: first apply to weights
                 if self.weight_decay > 0.0 {
                     ndarray::azip!((p in &mut *param_value) {
-                        *p = *p * (1.0 - self.lr * self.weight_decay);
+                        *p *= 1.0 - self.lr * self.weight_decay;
                     });
                 }
 
                 // Standard Adam update
-                let m = self.m
+                let m = self
+                    .m
                     .entry(param_name.clone())
                     .or_insert_with(|| ArrayD::zeros(param_value.shape()));
-                let v = self.v
+                let v = self
+                    .v
                     .entry(param_name.clone())
                     .or_insert_with(|| ArrayD::zeros(param_value.shape()));
 
@@ -391,7 +408,7 @@ impl Optimizer for AdamW {
                 let v_hat = &*v / bias_correction2;
 
                 ndarray::azip!((p in param_value, &mh in &m_hat, &vh in &v_hat) {
-                    *p = *p - self.lr * mh / (vh.sqrt() + self.eps);
+                    *p -= self.lr * mh / (vh.sqrt() + self.eps);
                 });
             }
         }
@@ -415,7 +432,7 @@ impl Optimizer for AdamW {
 /// Adaptive optimizer using running average of squared gradients.
 pub struct RMSprop {
     pub lr: f32,
-    pub alpha: f32,     // Smoothing constant (default 0.99)
+    pub alpha: f32, // Smoothing constant (default 0.99)
     pub eps: f32,
     pub weight_decay: f32,
     pub momentum: f32,
@@ -448,7 +465,11 @@ impl RMSprop {
 }
 
 impl Optimizer for RMSprop {
-    fn step(&mut self, parameters: &mut HashMap<String, Value>, gradients: &HashMap<String, Value>) {
+    fn step(
+        &mut self,
+        parameters: &mut HashMap<String, Value>,
+        gradients: &HashMap<String, Value>,
+    ) {
         // Copy parameters to avoid borrow checker issues
         let lr = self.lr;
         let alpha = self.alpha;
@@ -466,7 +487,8 @@ impl Optimizer for RMSprop {
                     grad = &grad + &(weight_decay * &*param_value);
                 }
 
-                let v = self.v
+                let v = self
+                    .v
                     .entry(param_name.clone())
                     .or_insert_with(|| ArrayD::zeros(param_value.shape()));
 
@@ -474,7 +496,8 @@ impl Optimizer for RMSprop {
                 *v = alpha * &*v + (1.0 - alpha) * &(&grad * &grad);
 
                 if momentum > 0.0 {
-                    let buf = self.buf
+                    let buf = self
+                        .buf
                         .entry(param_name.clone())
                         .or_insert_with(|| ArrayD::zeros(param_value.shape()));
 
@@ -484,11 +507,11 @@ impl Optimizer for RMSprop {
                     });
 
                     ndarray::azip!((p in param_value, &b in &*buf) {
-                        *p = *p - lr * b;
+                        *p -= lr * b;
                     });
                 } else {
                     ndarray::azip!((p in param_value, &g in &grad, &vi in &*v) {
-                        *p = *p - lr * g / (vi.sqrt() + eps);
+                        *p -= lr * g / (vi.sqrt() + eps);
                     });
                 }
             }
@@ -523,7 +546,11 @@ pub struct StepLR {
 
 impl StepLR {
     pub fn new(initial_lr: f32, step_size: usize, gamma: f32) -> Self {
-        Self { initial_lr, step_size, gamma }
+        Self {
+            initial_lr,
+            step_size,
+            gamma,
+        }
     }
 }
 
@@ -576,7 +603,9 @@ impl CosineAnnealingLR {
 impl LRScheduler for CosineAnnealingLR {
     fn get_lr(&self, epoch: usize, _step: usize) -> f32 {
         let progress = epoch as f32 / self.total_epochs as f32;
-        self.min_lr + (self.initial_lr - self.min_lr) * (1.0 + (std::f32::consts::PI * progress).cos()) / 2.0
+        self.min_lr
+            + (self.initial_lr - self.min_lr) * (1.0 + (std::f32::consts::PI * progress).cos())
+                / 2.0
     }
 }
 
@@ -588,7 +617,10 @@ pub struct LinearWarmupLR {
 
 impl LinearWarmupLR {
     pub fn new(target_lr: f32, warmup_steps: usize) -> Self {
-        Self { target_lr, warmup_steps }
+        Self {
+            target_lr,
+            warmup_steps,
+        }
     }
 }
 
@@ -633,8 +665,11 @@ impl LRScheduler for WarmupCosineAnnealingLR {
             self.target_lr * (step as f32 / self.warmup_steps as f32)
         } else {
             // Cosine annealing
-            let progress = (step - self.warmup_steps) as f32 / (self.total_steps - self.warmup_steps) as f32;
-            self.min_lr + (self.target_lr - self.min_lr) * (1.0 + (std::f32::consts::PI * progress).cos()) / 2.0
+            let progress =
+                (step - self.warmup_steps) as f32 / (self.total_steps - self.warmup_steps) as f32;
+            self.min_lr
+                + (self.target_lr - self.min_lr) * (1.0 + (std::f32::consts::PI * progress).cos())
+                    / 2.0
         }
     }
 }
@@ -685,10 +720,16 @@ mod tests {
     fn test_sgd_basic() {
         let mut sgd = Sgd::new(0.1);
         let mut params = HashMap::new();
-        params.insert("w".to_string(), Value::Tensor(array![1.0, 2.0, 3.0].into_dyn()));
+        params.insert(
+            "w".to_string(),
+            Value::Tensor(array![1.0, 2.0, 3.0].into_dyn()),
+        );
 
         let mut grads = HashMap::new();
-        grads.insert("w".to_string(), Value::Tensor(array![0.1, 0.2, 0.3].into_dyn()));
+        grads.insert(
+            "w".to_string(),
+            Value::Tensor(array![0.1, 0.2, 0.3].into_dyn()),
+        );
 
         sgd.step(&mut params, &grads);
 
@@ -704,9 +745,7 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("w".to_string(), Value::Tensor(array![1.0, 2.0].into_dyn()));
 
-        let grads = HashMap::from([
-            ("w".to_string(), Value::Tensor(array![0.1, 0.2].into_dyn()))
-        ]);
+        let grads = HashMap::from([("w".to_string(), Value::Tensor(array![0.1, 0.2].into_dyn()))]);
 
         // Several steps
         for _ in 0..10 {

@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: cargo clippy (-D warnings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --release --all-targets -- -D warnings
+
+  doc:
+    name: cargo doc (strict intra-doc links)
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --lib --no-deps --release
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Install Mesa (Vulkan software rasterizer) on Linux so wgpu tests can run.
+      - name: Install mesa-vulkan-drivers (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 vulkan-tools
+
+      - name: cargo build (all targets)
+        run: cargo build --release --all-targets
+
+      - name: cargo test (library + integration, without GPU)
+        run: cargo test --release --lib --tests --test grad_check
+
+      # GPU tests are best-effort: many runners lack a compute-capable adapter.
+      # We mark this step `continue-on-error` so CI still goes green when the
+      # runner has no GPU backend; the test binary still runs on local dev.
+      - name: cargo test --test gpu_backend (best-effort)
+        continue-on-error: true
+        run: cargo test --release --test gpu_backend -- --test-threads=1

@@ -1,49 +1,74 @@
-//  src/nn/norm.rs
-//! Layer Normalization for graph-based architecture with correct autograd.
+//! Layer Normalization with declarative shape/init API.
 
 use crate::asg::NodeType;
+use crate::nn::init::Initializer;
 use crate::nn::Module;
 use crate::tensor::{GraphContext, Tensor};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Small constant for numerical stability.
-const EPS: f32 = 1e-5;
+/// Default epsilon for numerical stability.
+const DEFAULT_EPS: f32 = 1e-5;
 
-/// Layer normalization layer that normalizes along the last axis.
+/// Layer normalization over the last axis.
+///
+/// Normalizes inputs as `y = gamma * (x - mean) / sqrt(var + eps) + beta`,
+/// where `gamma` is initialized to ones and `beta` to zeros — the standard
+/// PyTorch / TensorFlow defaults that preserve the original activations at
+/// the start of training.
 pub struct LayerNorm {
-    pub gamma: Tensor, // learnable scale
-    pub beta: Tensor,  // learnable shift
-    pub eps: f32,      // epsilon constant
+    /// Learnable scale of shape `[1, normalized_shape]`.
+    pub gamma: Tensor,
+    /// Learnable shift of shape `[1, normalized_shape]`.
+    pub beta: Tensor,
+    /// Epsilon for numerical stability.
+    pub eps: f32,
+    /// Size of the normalized axis.
+    pub normalized_shape: usize,
 }
 
 impl LayerNorm {
-    /// Creates a new layer, registering `gamma` and `beta` parameters in the graph.
-    pub fn new(ctx: &Rc<RefCell<GraphContext>>, name: &str) -> Self {
-        let gamma_name = format!("{}.gamma", name);
-        let beta_name = format!("{}.beta", name);
-        let gamma = Tensor::new_parameter(ctx, &gamma_name);
-        let beta = Tensor::new_parameter(ctx, &beta_name);
+    /// Creates a LayerNorm layer over `normalized_shape` features.
+    ///
+    /// # Arguments
+    /// * `ctx` — shared graph context.
+    /// * `name` — parameter name prefix (`"{name}.gamma"`, `"{name}.beta"`).
+    /// * `normalized_shape` — size of the axis being normalized (typically `d_model`).
+    pub fn new(ctx: &Rc<RefCell<GraphContext>>, name: &str, normalized_shape: usize) -> Self {
+        Self::with_eps(ctx, name, normalized_shape, DEFAULT_EPS)
+    }
+
+    /// Creates a LayerNorm with a custom epsilon.
+    pub fn with_eps(
+        ctx: &Rc<RefCell<GraphContext>>,
+        name: &str,
+        normalized_shape: usize,
+        eps: f32,
+    ) -> Self {
+        let gamma = Tensor::new_parameter_with_shape(
+            ctx,
+            &format!("{}.gamma", name),
+            vec![1, normalized_shape],
+            Initializer::Ones,
+        );
+        let beta = Tensor::new_parameter_with_shape(
+            ctx,
+            &format!("{}.beta", name),
+            vec![1, normalized_shape],
+            Initializer::Zeros,
+        );
         Self {
             gamma,
             beta,
-            eps: EPS,
+            eps,
+            normalized_shape,
         }
-    }
-
-    /// Creates a layer with custom epsilon.
-    pub fn with_eps(ctx: &Rc<RefCell<GraphContext>>, name: &str, eps: f32) -> Self {
-        let mut ln = Self::new(ctx, name);
-        ln.eps = eps;
-        ln
     }
 }
 
 impl Module for LayerNorm {
-    /// Forward pass:  y = gamma * (x - mean) / sqrt(var + eps) + beta
-    /// Uses specialized NodeType::LayerNorm for correct autograd.
+    /// Forward pass using specialized `NodeType::LayerNorm` for correct autograd.
     fn forward(&self, x: &Tensor) -> Tensor {
-        // Use context from input tensor x
         let ctx = &x.context;
         let node_id = ctx.borrow_mut().main_graph_mut().add_node(
             None,
@@ -62,5 +87,35 @@ impl Module for LayerNorm {
 
     fn parameters(&self) -> Vec<Tensor> {
         vec![self.gamma.clone(), self.beta.clone()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layernorm_registers_shapes() {
+        let ctx = Rc::new(RefCell::new(GraphContext::new()));
+        let _ln = LayerNorm::new(&ctx, "ln", 64);
+
+        let borrowed = ctx.borrow();
+        assert_eq!(
+            borrowed.parameter_meta("ln.gamma").unwrap().shape,
+            vec![1, 64]
+        );
+        assert_eq!(
+            borrowed.parameter_meta("ln.beta").unwrap().shape,
+            vec![1, 64]
+        );
+        // gamma initialized to ones, beta to zeros (standard LayerNorm init).
+        assert_eq!(
+            borrowed.parameter_meta("ln.gamma").unwrap().initializer,
+            Initializer::Ones
+        );
+        assert_eq!(
+            borrowed.parameter_meta("ln.beta").unwrap().initializer,
+            Initializer::Zeros
+        );
     }
 }

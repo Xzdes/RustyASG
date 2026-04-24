@@ -1,13 +1,13 @@
-// --- Файл: src/metrics/classification.rs ---
+// --- File: src/metrics/classification.rs ---
 
-//! Метрики для задач классификации.
+//! Classification metrics.
 
 use super::Metric;
 use ndarray::ArrayD;
 
-/// Метрика точности (Accuracy) для классификации.
+/// Accuracy metric for classification.
 ///
-/// Accuracy = (TP + TN) / (TP + TN + FP + FN)
+/// `Accuracy = (TP + TN) / (TP + TN + FP + FN)`
 #[derive(Debug, Clone, Default)]
 pub struct Accuracy {
     correct: usize,
@@ -26,8 +26,8 @@ impl Metric for Accuracy {
     type Output = f64;
 
     fn update(&mut self, predictions: &Self::Prediction, targets: &Self::Target) {
-        // Для multi-class: берем argmax от predictions
-        // Для binary: округляем predictions
+        // For multi-class: take argmax over predictions.
+        // For binary: round predictions.
         let is_multiclass = predictions.ndim() > 1 && predictions.shape().last().unwrap_or(&1) > &1;
 
         if is_multiclass {
@@ -42,19 +42,20 @@ impl Metric for Accuracy {
                     })
                     .unwrap_or(0);
 
-                let target_class = if targets.ndim() > 1 && targets.shape().last().unwrap_or(&1) > &1 {
-                    // One-hot encoded
-                    (0..targets.shape()[1])
-                        .max_by(|&a, &b| {
-                            targets[[i, a]]
-                                .partial_cmp(&targets[[i, b]])
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        })
-                        .unwrap_or(0)
-                } else {
-                    // Class indices
-                    targets.as_slice().unwrap()[i] as usize
-                };
+                let target_class =
+                    if targets.ndim() > 1 && targets.shape().last().unwrap_or(&1) > &1 {
+                        // One-hot encoded
+                        (0..targets.shape()[1])
+                            .max_by(|&a, &b| {
+                                targets[[i, a]]
+                                    .partial_cmp(&targets[[i, b]])
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                            .unwrap_or(0)
+                    } else {
+                        // Class indices
+                        targets.as_slice().unwrap()[i] as usize
+                    };
 
                 if pred_class == target_class {
                     self.correct += 1;
@@ -92,7 +93,7 @@ impl Metric for Accuracy {
     }
 }
 
-/// Confusion Matrix для бинарной классификации.
+/// Confusion matrix for binary classification.
 #[derive(Debug, Clone, Default)]
 pub struct BinaryConfusionMatrix {
     pub true_positives: usize,
@@ -106,7 +107,7 @@ impl BinaryConfusionMatrix {
         Self::default()
     }
 
-    /// Обновляет матрицу ошибок.
+    /// Updates the confusion matrix.
     pub fn update(&mut self, predictions: &ArrayD<f32>, targets: &ArrayD<f32>, threshold: f32) {
         for (pred, target) in predictions.iter().zip(targets.iter()) {
             let pred_positive = *pred >= threshold;
@@ -121,7 +122,7 @@ impl BinaryConfusionMatrix {
         }
     }
 
-    /// Сбрасывает состояние.
+    /// Resets the state.
     pub fn reset(&mut self) {
         self.true_positives = 0;
         self.true_negatives = 0;
@@ -129,12 +130,12 @@ impl BinaryConfusionMatrix {
         self.false_negatives = 0;
     }
 
-    /// Общее количество образцов.
+    /// Total number of samples.
     pub fn total(&self) -> usize {
         self.true_positives + self.true_negatives + self.false_positives + self.false_negatives
     }
 
-    /// Вычисляет accuracy.
+    /// Computes accuracy.
     pub fn accuracy(&self) -> f64 {
         let total = self.total();
         if total == 0 {
@@ -143,7 +144,7 @@ impl BinaryConfusionMatrix {
         (self.true_positives + self.true_negatives) as f64 / total as f64
     }
 
-    /// Вычисляет precision.
+    /// Computes precision.
     pub fn precision(&self) -> f64 {
         let denom = self.true_positives + self.false_positives;
         if denom == 0 {
@@ -152,7 +153,7 @@ impl BinaryConfusionMatrix {
         self.true_positives as f64 / denom as f64
     }
 
-    /// Вычисляет recall (sensitivity).
+    /// Computes recall (sensitivity).
     pub fn recall(&self) -> f64 {
         let denom = self.true_positives + self.false_negatives;
         if denom == 0 {
@@ -161,7 +162,7 @@ impl BinaryConfusionMatrix {
         self.true_positives as f64 / denom as f64
     }
 
-    /// Вычисляет specificity.
+    /// Computes specificity.
     pub fn specificity(&self) -> f64 {
         let denom = self.true_negatives + self.false_positives;
         if denom == 0 {
@@ -170,7 +171,7 @@ impl BinaryConfusionMatrix {
         self.true_negatives as f64 / denom as f64
     }
 
-    /// Вычисляет F1-Score.
+    /// Computes the F1-Score.
     pub fn f1_score(&self) -> f64 {
         let p = self.precision();
         let r = self.recall();
@@ -181,7 +182,7 @@ impl BinaryConfusionMatrix {
     }
 }
 
-/// Метрика Precision для бинарной классификации.
+/// Precision metric for binary classification.
 #[derive(Debug, Clone)]
 pub struct Precision {
     confusion: BinaryConfusionMatrix,
@@ -230,7 +231,7 @@ impl Metric for Precision {
     }
 }
 
-/// Метрика Recall для бинарной классификации.
+/// Recall metric for binary classification.
 #[derive(Debug, Clone)]
 pub struct Recall {
     confusion: BinaryConfusionMatrix,
@@ -279,7 +280,7 @@ impl Metric for Recall {
     }
 }
 
-/// Метрика F1-Score для бинарной классификации.
+/// F1-Score metric for binary classification.
 #[derive(Debug, Clone)]
 pub struct F1Score {
     confusion: BinaryConfusionMatrix,
@@ -328,7 +329,7 @@ impl Metric for F1Score {
     }
 }
 
-/// Confusion Matrix для многоклассовой классификации.
+/// Confusion matrix for multi-class classification.
 #[derive(Debug, Clone)]
 pub struct MultiClassConfusionMatrix {
     num_classes: usize,
@@ -343,12 +344,12 @@ impl MultiClassConfusionMatrix {
         }
     }
 
-    /// Обновляет матрицу ошибок.
+    /// Updates the confusion matrix.
     pub fn update(&mut self, predictions: &ArrayD<f32>, targets: &ArrayD<f32>) {
         let batch_size = predictions.shape()[0];
 
         for i in 0..batch_size {
-            // Находим предсказанный класс (argmax)
+            // Find the predicted class (argmax).
             let pred_class = (0..self.num_classes)
                 .max_by(|&a, &b| {
                     predictions[[i, a]]
@@ -357,7 +358,7 @@ impl MultiClassConfusionMatrix {
                 })
                 .unwrap_or(0);
 
-            // Находим истинный класс
+            // Find the true class.
             let actual_class = if targets.ndim() > 1 && targets.shape()[1] == self.num_classes {
                 // One-hot encoded
                 (0..self.num_classes)
@@ -378,7 +379,7 @@ impl MultiClassConfusionMatrix {
         }
     }
 
-    /// Сбрасывает состояние.
+    /// Resets the state.
     pub fn reset(&mut self) {
         for row in &mut self.matrix {
             for cell in row {
@@ -387,12 +388,12 @@ impl MultiClassConfusionMatrix {
         }
     }
 
-    /// Возвращает матрицу ошибок.
+    /// Returns the confusion matrix.
     pub fn get_matrix(&self) -> &Vec<Vec<usize>> {
         &self.matrix
     }
 
-    /// Вычисляет accuracy.
+    /// Computes accuracy.
     pub fn accuracy(&self) -> f64 {
         let correct: usize = (0..self.num_classes).map(|i| self.matrix[i][i]).sum();
         let total: usize = self.matrix.iter().flat_map(|row| row.iter()).sum();
@@ -402,7 +403,7 @@ impl MultiClassConfusionMatrix {
         correct as f64 / total as f64
     }
 
-    /// Вычисляет precision для каждого класса.
+    /// Computes per-class precision.
     pub fn precision_per_class(&self) -> Vec<f64> {
         (0..self.num_classes)
             .map(|c| {
@@ -417,7 +418,7 @@ impl MultiClassConfusionMatrix {
             .collect()
     }
 
-    /// Вычисляет recall для каждого класса.
+    /// Computes per-class recall.
     pub fn recall_per_class(&self) -> Vec<f64> {
         (0..self.num_classes)
             .map(|c| {
@@ -432,7 +433,7 @@ impl MultiClassConfusionMatrix {
             .collect()
     }
 
-    /// Вычисляет macro-averaged F1-Score.
+    /// Computes the macro-averaged F1-Score.
     pub fn macro_f1(&self) -> f64 {
         let precisions = self.precision_per_class();
         let recalls = self.recall_per_class();
@@ -453,7 +454,7 @@ impl MultiClassConfusionMatrix {
     }
 }
 
-/// Top-K Accuracy для многоклассовой классификации.
+/// Top-K Accuracy for multi-class classification.
 #[derive(Debug, Clone)]
 pub struct TopKAccuracy {
     k: usize,
@@ -481,14 +482,13 @@ impl Metric for TopKAccuracy {
         let num_classes = predictions.shape()[1];
 
         for i in 0..batch_size {
-            // Находим top-k классов
-            let mut scores: Vec<(usize, f32)> = (0..num_classes)
-                .map(|c| (c, predictions[[i, c]]))
-                .collect();
+            // Find the top-k classes.
+            let mut scores: Vec<(usize, f32)> =
+                (0..num_classes).map(|c| (c, predictions[[i, c]])).collect();
             scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             let top_k: Vec<usize> = scores.iter().take(self.k).map(|(c, _)| *c).collect();
 
-            // Находим истинный класс
+            // Find the true class.
             let actual_class = if targets.ndim() > 1 && targets.shape()[1] == num_classes {
                 (0..num_classes)
                     .max_by(|&a, &b| {
@@ -534,14 +534,9 @@ mod tests {
     fn test_accuracy_binary() {
         let mut acc = Accuracy::new();
 
-        let preds = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![0.9, 0.8, 0.3, 0.1],
-        ).unwrap();
-        let targets = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![1.0, 1.0, 0.0, 0.0],
-        ).unwrap();
+        let preds = ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![0.9, 0.8, 0.3, 0.1]).unwrap();
+        let targets =
+            ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![1.0, 1.0, 0.0, 0.0]).unwrap();
 
         acc.update(&preds, &targets);
         assert!((acc.compute() - 1.0).abs() < 1e-6);
@@ -551,20 +546,15 @@ mod tests {
     fn test_binary_confusion_matrix() {
         let mut cm = BinaryConfusionMatrix::new();
 
-        let preds = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![0.9, 0.8, 0.3, 0.6],
-        ).unwrap();
-        let targets = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[4]),
-            vec![1.0, 0.0, 0.0, 1.0],
-        ).unwrap();
+        let preds = ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![0.9, 0.8, 0.3, 0.6]).unwrap();
+        let targets =
+            ArrayD::from_shape_vec(ndarray::IxDyn(&[4]), vec![1.0, 0.0, 0.0, 1.0]).unwrap();
 
         cm.update(&preds, &targets, 0.5);
 
-        assert_eq!(cm.true_positives, 2);  // 0.9->1, 0.6->1
+        assert_eq!(cm.true_positives, 2); // 0.9->1, 0.6->1
         assert_eq!(cm.false_positives, 1); // 0.8->0 but pred 1
-        assert_eq!(cm.true_negatives, 1);  // 0.3->0
+        assert_eq!(cm.true_negatives, 1); // 0.3->0
         assert_eq!(cm.false_negatives, 0);
     }
 
@@ -573,14 +563,12 @@ mod tests {
         let mut precision = Precision::new();
         let mut recall = Recall::new();
 
-        let preds = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[6]),
-            vec![0.9, 0.8, 0.7, 0.3, 0.2, 0.6],
-        ).unwrap();
-        let targets = ArrayD::from_shape_vec(
-            ndarray::IxDyn(&[6]),
-            vec![1.0, 1.0, 0.0, 0.0, 1.0, 0.0],
-        ).unwrap();
+        let preds =
+            ArrayD::from_shape_vec(ndarray::IxDyn(&[6]), vec![0.9, 0.8, 0.7, 0.3, 0.2, 0.6])
+                .unwrap();
+        let targets =
+            ArrayD::from_shape_vec(ndarray::IxDyn(&[6]), vec![1.0, 1.0, 0.0, 0.0, 1.0, 0.0])
+                .unwrap();
 
         precision.update(&preds, &targets);
         recall.update(&preds, &targets);
@@ -589,7 +577,7 @@ mod tests {
         // Precision = 2/4 = 0.5
         // Recall = 2/3 ≈ 0.667
         assert!((precision.compute() - 0.5).abs() < 1e-6);
-        assert!((recall.compute() - 2.0/3.0).abs() < 1e-6);
+        assert!((recall.compute() - 2.0 / 3.0).abs() < 1e-6);
     }
 
     #[test]
@@ -603,7 +591,8 @@ mod tests {
                 0.1, 0.8, 0.1, // class 1
                 0.2, 0.3, 0.5, // class 2
             ],
-        ).unwrap();
+        )
+        .unwrap();
         let targets = ArrayD::from_shape_vec(
             ndarray::IxDyn(&[3, 3]),
             vec![
@@ -611,7 +600,8 @@ mod tests {
                 0.0, 1.0, 0.0, // class 1
                 0.0, 0.0, 1.0, // class 2
             ],
-        ).unwrap();
+        )
+        .unwrap();
 
         cm.update(&preds, &targets);
         assert!((cm.accuracy() - 1.0).abs() < 1e-6);

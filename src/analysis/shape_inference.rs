@@ -4,6 +4,7 @@
 //! and data type of the output tensor for each node based on its input shapes and operation type.
 
 use crate::asg::{Asg, AsgError, DType, Node, NodeId, NodeType, Shape, Value};
+use crate::tensor::GraphContext;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
@@ -24,24 +25,32 @@ pub enum ShapeInferenceError {
              This may mean the node has not been processed by shape inference yet or the graph contains a cyclic dependency.")]
     MissingShapeInfo(NodeId),
 
-    #[error("Initial shape not specified for '{0}'. \
-             Add the shape to the initial_shapes HashMap when calling ShapeInference::run().")]
+    #[error(
+        "Initial shape not specified for '{0}'. \
+             Add the shape to the initial_shapes HashMap when calling ShapeInference::run()."
+    )]
     MissingInitialShape(String),
 
-    #[error("Invalid tensor rank for node {node_id}: expected {expected}D, got {actual}D. \
-             Check input data dimensions.")]
+    #[error(
+        "Invalid tensor rank for node {node_id}: expected {expected}D, got {actual}D. \
+             Check input data dimensions."
+    )]
     InvalidRank {
         node_id: NodeId,
         expected: usize,
         actual: usize,
     },
 
-    #[error("Node {0} must be a Literal for shape computation (e.g., for Reshape operation). \
-             Dynamic shapes are not supported.")]
+    #[error(
+        "Node {0} must be a Literal for shape computation (e.g., for Reshape operation). \
+             Dynamic shapes are not supported."
+    )]
     NotALiteral(NodeId),
 
-    #[error("Shape inference not implemented for operation: {0}. \
-             Add handling for this node type in ShapeInference::infer_node_shape().")]
+    #[error(
+        "Shape inference not implemented for operation: {0}. \
+             Add handling for this node type in ShapeInference::infer_node_shape()."
+    )]
     UnimplementedNodeType(String),
 
     #[error("Broadcast error: cannot broadcast shapes {0:?} and {1:?} to a common shape.")]
@@ -79,6 +88,27 @@ impl ShapeInference {
         }
 
         Ok(())
+    }
+
+    /// Runs shape inference using parameter shapes registered in the
+    /// `GraphContext` plus user-supplied input shapes.
+    ///
+    /// This is the recommended entry point when using layers built on the
+    /// declarative API (`Linear::new(ctx, name, in, out)`, `LayerNorm::new`,
+    /// etc.). Callers no longer need to manually enumerate parameter names
+    /// in the shape map — only the true graph inputs.
+    ///
+    /// # Arguments
+    /// * `asg` — the graph to analyze (modified in place).
+    /// * `context` — the graph context that owns the parameter registry.
+    /// * `input_shapes` — shapes for user-provided `Input` nodes.
+    pub fn run_with_context(
+        asg: &mut Asg,
+        context: &GraphContext,
+        input_shapes: &HashMap<String, (Shape, DType)>,
+    ) -> Result<()> {
+        let combined = context.build_shape_map(input_shapes);
+        Self::run(asg, &combined)
     }
 
     /// Main shape inference logic for a single node.
@@ -143,7 +173,11 @@ impl ShapeInference {
                     });
                 }
 
-                let mut out_shape = if ls.len() > 2 { ls[..ls.len() - 2].to_vec() } else { vec![] };
+                let mut out_shape = if ls.len() > 2 {
+                    ls[..ls.len() - 2].to_vec()
+                } else {
+                    vec![]
+                };
                 out_shape.push(m);
                 out_shape.push(n);
 
@@ -151,17 +185,22 @@ impl ShapeInference {
             }
 
             // Element-wise operations - shape unchanged
-            NodeType::ReLU(id) | NodeType::Sigmoid(id) | NodeType::Sqrt(id) | NodeType::Log(id) |
-            NodeType::Exp(id) | NodeType::Abs(id) | NodeType::Neg(id) | NodeType::Tanh(id) |
-            NodeType::GELU(id) | NodeType::SiLU(id) => {
-                Self::get_shape_dtype(asg, *id)
-            }
+            NodeType::ReLU(id)
+            | NodeType::Sigmoid(id)
+            | NodeType::Sqrt(id)
+            | NodeType::Log(id)
+            | NodeType::Exp(id)
+            | NodeType::Abs(id)
+            | NodeType::Neg(id)
+            | NodeType::Tanh(id)
+            | NodeType::GELU(id)
+            | NodeType::SiLU(id) => Self::get_shape_dtype(asg, *id),
 
             // Element-wise with parameters - shape unchanged
-            NodeType::LeakyReLU(id, _) | NodeType::ELU(id, _) | NodeType::Softplus(id, _) |
-            NodeType::Clamp(id, _, _) => {
-                Self::get_shape_dtype(asg, *id)
-            }
+            NodeType::LeakyReLU(id, _)
+            | NodeType::ELU(id, _)
+            | NodeType::Softplus(id, _)
+            | NodeType::Clamp(id, _, _) => Self::get_shape_dtype(asg, *id),
 
             NodeType::Sum(_) => Ok((vec![], DType::F32)),
 
@@ -210,7 +249,11 @@ impl ShapeInference {
             NodeType::GreaterThan(l, r) => {
                 let (ls, _) = Self::get_shape_dtype(asg, *l)?;
                 let (rs, _) = Self::get_shape_dtype(asg, *r)?;
-                let out_shape = if ls.iter().product::<usize>() >= rs.iter().product::<usize>() { ls } else { rs };
+                let out_shape = if ls.iter().product::<usize>() >= rs.iter().product::<usize>() {
+                    ls
+                } else {
+                    rs
+                };
                 Ok((out_shape, DType::F32)) // Returns 0.0 or 1.0, so F32
             }
 
@@ -220,7 +263,11 @@ impl ShapeInference {
                 Ok((target_shape, dtype))
             }
 
-            NodeType::MaxPool2d { input, kernel_size, stride } => {
+            NodeType::MaxPool2d {
+                input,
+                kernel_size,
+                stride,
+            } => {
                 let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
 
                 if input_shape.len() != 4 {
@@ -258,7 +305,15 @@ impl ShapeInference {
             }
 
             // Conv2d: [N, C_in, H, W] -> [N, C_out, H_out, W_out]
-            NodeType::Conv2d { input, weight, stride, padding, dilation, groups, .. } => {
+            // Note: groups doesn't affect output shape (C_out = weight[0] covers grouped case).
+            NodeType::Conv2d {
+                input,
+                weight,
+                stride,
+                padding,
+                dilation,
+                ..
+            } => {
                 let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
                 let (weight_shape, _) = Self::get_shape_dtype(asg, *weight)?;
 
@@ -296,7 +351,16 @@ impl ShapeInference {
             }
 
             // ConvTranspose2d: [N, C_in, H, W] -> [N, C_out, H_out, W_out]
-            NodeType::ConvTranspose2d { input, weight, stride, padding, output_padding, dilation, groups, .. } => {
+            NodeType::ConvTranspose2d {
+                input,
+                weight,
+                stride,
+                padding,
+                output_padding,
+                dilation,
+                groups,
+                ..
+            } => {
                 let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
                 let (weight_shape, _) = Self::get_shape_dtype(asg, *weight)?;
 
@@ -317,14 +381,25 @@ impl ShapeInference {
                 let kernel_h = weight_shape[2];
                 let kernel_w = weight_shape[3];
 
-                let out_h = (h - 1) * stride.0 - 2 * padding.0 + dilation.0 * (kernel_h - 1) + output_padding.0 + 1;
-                let out_w = (w - 1) * stride.1 - 2 * padding.1 + dilation.1 * (kernel_w - 1) + output_padding.1 + 1;
+                let out_h = (h - 1) * stride.0 - 2 * padding.0
+                    + dilation.0 * (kernel_h - 1)
+                    + output_padding.0
+                    + 1;
+                let out_w = (w - 1) * stride.1 - 2 * padding.1
+                    + dilation.1 * (kernel_w - 1)
+                    + output_padding.1
+                    + 1;
 
                 Ok((vec![n, out_channels, out_h, out_w], dtype))
             }
 
             // AvgPool2d: [N, C, H, W] -> [N, C, H_out, W_out]
-            NodeType::AvgPool2d { input, kernel_size, stride, padding } => {
+            NodeType::AvgPool2d {
+                input,
+                kernel_size,
+                stride,
+                padding,
+            } => {
                 let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
 
                 if input_shape.len() != 4 {
@@ -387,7 +462,11 @@ impl ShapeInference {
             }
 
             // EmbeddingGrad: grad_output[*, embedding_dim] + indices[*] -> [num_embeddings, embedding_dim]
-            NodeType::EmbeddingGrad { grad_output, num_embeddings, .. } => {
+            NodeType::EmbeddingGrad {
+                grad_output,
+                num_embeddings,
+                ..
+            } => {
                 let (grad_shape, dtype) = Self::get_shape_dtype(asg, *grad_output)?;
                 let embedding_dim = *grad_shape.last().unwrap();
 
@@ -401,28 +480,32 @@ impl ShapeInference {
             }
 
             // Conv2dBackwardInput: output has same shape as original input
-            NodeType::Conv2dBackwardInput { input_shape, grad_output, .. } => {
+            NodeType::Conv2dBackwardInput {
+                input_shape,
+                grad_output,
+                ..
+            } => {
                 let (_, dtype) = Self::get_shape_dtype(asg, *grad_output)?;
                 let (n, c, h, w) = *input_shape;
                 Ok((vec![n, c, h, w], dtype))
             }
 
             // Conv2dBackwardWeight: output has same shape as weight
-            NodeType::Conv2dBackwardWeight { weight_shape, grad_output, .. } => {
+            NodeType::Conv2dBackwardWeight {
+                weight_shape,
+                grad_output,
+                ..
+            } => {
                 let (_, dtype) = Self::get_shape_dtype(asg, *grad_output)?;
                 let (c_out, c_in, kh, kw) = *weight_shape;
                 Ok((vec![c_out, c_in, kh, kw], dtype))
             }
 
             // LayerNorm: output has same shape as input
-            NodeType::LayerNorm { input, .. } => {
-                Self::get_shape_dtype(asg, *input)
-            }
+            NodeType::LayerNorm { input, .. } => Self::get_shape_dtype(asg, *input),
 
             // LayerNormBackward: output (gradient w.r.t. input) has same shape as input
-            NodeType::LayerNormBackward { input, .. } => {
-                Self::get_shape_dtype(asg, *input)
-            }
+            NodeType::LayerNormBackward { input, .. } => Self::get_shape_dtype(asg, *input),
 
             // LayerNormGradGamma: output has shape [1, norm_size] where norm_size is last dim of input
             NodeType::LayerNormGradGamma { input, .. } => {
@@ -438,8 +521,104 @@ impl ShapeInference {
                 Ok((vec![1, norm_size], dtype))
             }
 
+            // SliceBackward: same as grad_output except the sliced axis grows back to full_size.
+            NodeType::SliceBackward {
+                grad_output,
+                axis,
+                full_size,
+                ..
+            } => {
+                let (grad_shape, dtype) = Self::get_shape_dtype(asg, *grad_output)?;
+                if *axis >= grad_shape.len() {
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: *axis + 1,
+                        actual: grad_shape.len(),
+                    });
+                }
+                let mut out = grad_shape;
+                out[*axis] = *full_size;
+                Ok((out, dtype))
+            }
+
+            // Slice: same shape but the sliced axis becomes (end - start).
+            NodeType::Slice {
+                input,
+                axis,
+                start,
+                end,
+            } => {
+                let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
+                if *axis >= input_shape.len() {
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: *axis + 1,
+                        actual: input_shape.len(),
+                    });
+                }
+                if end < start || *end > input_shape[*axis] {
+                    return Err(ShapeInferenceError::AsgError(AsgError::InvalidGraph(
+                        format!(
+                            "Slice node {}: invalid range {}..{} for axis {} with size {}",
+                            node.id, start, end, axis, input_shape[*axis]
+                        ),
+                    )));
+                }
+                let mut out_shape = input_shape;
+                out_shape[*axis] = end - start;
+                Ok((out_shape, dtype))
+            }
+
+            // Concat: same shape except the concat axis sums across inputs.
+            NodeType::Concat { inputs, axis } => {
+                if inputs.is_empty() {
+                    return Err(ShapeInferenceError::AsgError(AsgError::InvalidGraph(
+                        format!("Concat node {} has zero inputs", node.id),
+                    )));
+                }
+                let (first_shape, dtype) = Self::get_shape_dtype(asg, inputs[0])?;
+                if *axis >= first_shape.len() {
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: *axis + 1,
+                        actual: first_shape.len(),
+                    });
+                }
+                let mut axis_total = first_shape[*axis];
+                for &input_id in &inputs[1..] {
+                    let (s, _) = Self::get_shape_dtype(asg, input_id)?;
+                    if s.len() != first_shape.len() {
+                        return Err(ShapeInferenceError::IncompatibleShapes {
+                            op: "Concat".into(),
+                            shape1: first_shape.clone(),
+                            shape2: s,
+                        });
+                    }
+                    for (i, (a, b)) in first_shape.iter().zip(s.iter()).enumerate() {
+                        if i != *axis && a != b {
+                            return Err(ShapeInferenceError::IncompatibleShapes {
+                                op: "Concat".into(),
+                                shape1: first_shape.clone(),
+                                shape2: s.clone(),
+                            });
+                        }
+                    }
+                    axis_total += s[*axis];
+                }
+                let mut out_shape = first_shape;
+                out_shape[*axis] = axis_total;
+                Ok((out_shape, dtype))
+            }
+
             // --- Explicitly handle remaining nodes to avoid fallback ---
-            unimplemented_type => Err(ShapeInferenceError::UnimplementedNodeType(format!("{:?}", unimplemented_type))),
+            NodeType::If { .. }
+            | NodeType::ForLoop { .. }
+            | NodeType::FunctionDefinition { .. }
+            | NodeType::FunctionCall { .. }
+            | NodeType::Print(_) => Err(ShapeInferenceError::UnimplementedNodeType(format!(
+                "{:?}",
+                node.node_type
+            ))),
         }
     }
 
@@ -510,15 +689,29 @@ impl ShapeInference {
 
             NodeType::Transpose(a, _, _) => vec![*a],
             NodeType::MaxPool2d { input, .. } => vec![*input],
-            NodeType::MaxUnpool2d { input, original_input, .. } => vec![*input, *original_input],
-            NodeType::Conv2d { input, weight, bias, .. } => {
+            NodeType::MaxUnpool2d {
+                input,
+                original_input,
+                ..
+            } => vec![*input, *original_input],
+            NodeType::Conv2d {
+                input,
+                weight,
+                bias,
+                ..
+            } => {
                 let mut deps = vec![*input, *weight];
                 if let Some(b) = bias {
                     deps.push(*b);
                 }
                 deps
             }
-            NodeType::ConvTranspose2d { input, weight, bias, .. } => {
+            NodeType::ConvTranspose2d {
+                input,
+                weight,
+                bias,
+                ..
+            } => {
                 let mut deps = vec![*input, *weight];
                 if let Some(b) = bias {
                     deps.push(*b);
@@ -528,14 +721,40 @@ impl ShapeInference {
             NodeType::AvgPool2d { input, .. } => vec![*input],
             NodeType::AdaptiveAvgPool2d { input, .. } => vec![*input],
             NodeType::Embedding { indices, weight } => vec![*indices, *weight],
-            NodeType::EmbeddingGrad { grad_output, indices, .. } => vec![*grad_output, *indices],
-            NodeType::AvgUnpool2d { input, original_input, .. } => vec![*input, *original_input],
-            NodeType::Conv2dBackwardInput { grad_output, weight, .. } => vec![*grad_output, *weight],
-            NodeType::Conv2dBackwardWeight { grad_output, input, .. } => vec![*grad_output, *input],
-            NodeType::LayerNorm { input, gamma, beta, .. } => vec![*input, *gamma, *beta],
-            NodeType::LayerNormBackward { grad_output, input, gamma, .. } => vec![*grad_output, *input, *gamma],
-            NodeType::LayerNormGradGamma { grad_output, input, .. } => vec![*grad_output, *input],
+            NodeType::EmbeddingGrad {
+                grad_output,
+                indices,
+                ..
+            } => vec![*grad_output, *indices],
+            NodeType::AvgUnpool2d {
+                input,
+                original_input,
+                ..
+            } => vec![*input, *original_input],
+            NodeType::Conv2dBackwardInput {
+                grad_output,
+                weight,
+                ..
+            } => vec![*grad_output, *weight],
+            NodeType::Conv2dBackwardWeight {
+                grad_output, input, ..
+            } => vec![*grad_output, *input],
+            NodeType::LayerNorm {
+                input, gamma, beta, ..
+            } => vec![*input, *gamma, *beta],
+            NodeType::LayerNormBackward {
+                grad_output,
+                input,
+                gamma,
+                ..
+            } => vec![*grad_output, *input, *gamma],
+            NodeType::LayerNormGradGamma {
+                grad_output, input, ..
+            } => vec![*grad_output, *input],
             NodeType::LayerNormGradBeta { grad_output } => vec![*grad_output],
+            NodeType::Slice { input, .. } => vec![*input],
+            NodeType::Concat { inputs, .. } => inputs.clone(),
+            NodeType::SliceBackward { grad_output, .. } => vec![*grad_output],
             _ => vec![],
         };
 

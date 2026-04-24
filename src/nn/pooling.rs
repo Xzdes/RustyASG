@@ -31,7 +31,10 @@ impl MaxPool2d {
     /// * `kernel_size` - Pooling window size
     /// * `stride` - Pooling stride (usually equals kernel_size)
     pub fn new(kernel_size: (usize, usize), stride: (usize, usize)) -> Self {
-        Self { kernel_size, stride }
+        Self {
+            kernel_size,
+            stride,
+        }
     }
 
     /// Creates MaxPool2d with equal kernel_size and stride.
@@ -128,7 +131,9 @@ impl AdaptiveAvgPool2d {
 
     /// Creates Global Average Pooling (GAP) - output size (1, 1).
     pub fn global() -> Self {
-        Self { output_size: (1, 1) }
+        Self {
+            output_size: (1, 1),
+        }
     }
 }
 
@@ -165,7 +170,7 @@ mod tests {
         let input = Tensor::new_input(&context, "input");
         let pool = MaxPool2d::new((2, 2), (2, 2));
 
-        let output = pool.forward(&input);
+        let _ = pool.forward(&input);
         assert!(pool.parameters().is_empty());
     }
 
@@ -182,7 +187,7 @@ mod tests {
         let input = Tensor::new_input(&context, "input");
         let pool = AvgPool2d::new((2, 2), (2, 2)).with_padding((1, 1));
 
-        let output = pool.forward(&input);
+        let _ = pool.forward(&input);
         assert_eq!(pool.padding, (1, 1));
     }
 
@@ -192,7 +197,7 @@ mod tests {
         let input = Tensor::new_input(&context, "input");
         let pool = AdaptiveAvgPool2d::new((7, 7));
 
-        let output = pool.forward(&input);
+        let _ = pool.forward(&input);
         assert_eq!(pool.output_size, (7, 7));
     }
 

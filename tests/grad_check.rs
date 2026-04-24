@@ -1,5 +1,7 @@
-//  tests/grad_check.rs  (финальная компилирующаяся версия)
-//! Проверка корректности обратного прохода численным дифференцированием.
+//  tests/grad_check.rs  (final compiling version)
+//! Verify backward pass correctness via numerical differentiation.
+
+#![allow(clippy::type_complexity)]
 
 use rustyasg::analysis::shape_inference::ShapeInference;
 use rustyasg::asg::{DType, NodeType, Value};
@@ -14,33 +16,35 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-const EPS: f32 = 1e-4;          // конечное приращение
-const TOL: f32 = 5e-2;          // допустимая относительная погрешность
+const EPS: f32 = 1e-4; // finite difference step
+const TOL: f32 = 5e-2; // acceptable relative error
 
-/// Утилита: сравнивает два тензора и паникует, если не близки.
+/// Utility: compares two tensors and panics if they are not close.
 fn assert_close(a: &ArrayD<f32>, b: &ArrayD<f32>, name: &str) {
-    println!(">>> проверка градиентов для '{}'", name);
-    println!("    аналитический : {:?}", a.as_slice().unwrap());
-    println!("    численный     : {:?}", b.as_slice().unwrap());
-    assert_eq!(a.shape(), b.shape(), "shape mismatch для '{}'", name);
+    println!(">>> checking gradients for '{}'", name);
+    println!("    analytic  : {:?}", a.as_slice().unwrap());
+    println!("    numeric   : {:?}", b.as_slice().unwrap());
+    assert_eq!(a.shape(), b.shape(), "shape mismatch for '{}'", name);
     for (i, (av, &nv)) in a.iter().zip(b.iter()).enumerate() {
         let large = av.abs().max(nv.abs());
-        if large < 1e-7 { continue; }
+        if large < 1e-7 {
+            continue;
+        }
         let rel = (av - nv).abs() / large;
         if rel > TOL {
             panic!(
-                "\n!!! градиенты различаются для '{}' (idx {})\
-                 \n  аналитический: {:.6}\
-                 \n  численный    : {:.6}\
-                 \n  отн. ошибка  : {:.6} > {}\n",
+                "\n!!! gradients differ for '{}' (idx {})\
+                 \n  analytic : {:.6}\
+                 \n  numeric  : {:.6}\
+                 \n  rel. err : {:.6} > {}\n",
                 name, i, av, nv, rel, TOL
             );
         }
     }
-    println!(">>> совпали!\n");
+    println!(">>> match!\n");
 }
 
-/// Структура-тестер: строит граф, считает аналитические и численные градиенты.
+/// Tester struct: builds a graph and computes analytic and numeric gradients.
 struct GradTest {
     builder: Box<dyn Fn(&HashMap<String, Tensor>) -> Tensor>,
     inputs: HashMap<String, ArrayD<f32>>,
@@ -48,7 +52,7 @@ struct GradTest {
 }
 
 impl GradTest {
-    /// Аналитический градиент через autograd.
+    /// Analytic gradient via autograd.
     fn analytic(&self) -> ArrayD<f32> {
         let ctx = Rc::new(RefCell::new(GraphContext::new()));
         let mut tensors = HashMap::new();
@@ -87,7 +91,7 @@ impl GradTest {
         }
     }
 
-    /// Численный центральный градиент.
+    /// Numeric central gradient.
     fn numeric(&self) -> ArrayD<f32> {
         let backend = CpuBackend::new();
         let base = &self.inputs[&self.wrt];
@@ -133,7 +137,7 @@ impl GradTest {
         }
     }
 
-    /// Запустить тест: сравнить аналитику и числа.
+    /// Run the test: compare analytic and numeric gradients.
     fn run(&self) {
         let ga = self.analytic();
         let gn = self.numeric();
@@ -158,7 +162,7 @@ fn grad_layernorm_x() {
             let ctx = t.values().next().unwrap().context.clone();
             let x = &t["x"];
             let target = &t["target"];
-            let mut ln = LayerNorm::new(&ctx, "ln");
+            let mut ln = LayerNorm::new(&ctx, "ln", 3);
             ln.gamma = t["gamma"].clone();
             ln.beta = t["beta"].clone();
             let output = ln.forward(x);
@@ -188,7 +192,7 @@ fn grad_layernorm_gamma() {
         builder: Box::new(|t| {
             let ctx = t.values().next().unwrap().context.clone();
             let x = &t["x"];
-            let mut ln = LayerNorm::new(&ctx, "ln");
+            let mut ln = LayerNorm::new(&ctx, "ln", 3);
             ln.gamma = t["gamma"].clone();
             ln.beta = t["beta"].clone();
             ln.forward(x).sum()
@@ -214,7 +218,7 @@ fn grad_layernorm_beta() {
         builder: Box::new(|t| {
             let ctx = t.values().next().unwrap().context.clone();
             let x = &t["x"];
-            let mut ln = LayerNorm::new(&ctx, "ln");
+            let mut ln = LayerNorm::new(&ctx, "ln", 3);
             ln.gamma = t["gamma"].clone();
             ln.beta = t["beta"].clone();
             ln.forward(x).sum()
@@ -229,7 +233,7 @@ fn grad_layernorm_beta() {
 // Conv2d Autograd Tests
 // ============================================================
 
-/// Создание Conv2d через NodeType напрямую в графе
+/// Create a Conv2d via NodeType directly in the graph.
 fn create_conv2d(
     ctx: &Rc<RefCell<GraphContext>>,
     input: &Tensor,
@@ -249,25 +253,30 @@ fn create_conv2d(
             groups: 1,
         },
     );
-    Tensor { node_id, context: Rc::clone(ctx) }
+    Tensor {
+        node_id,
+        context: Rc::clone(ctx),
+    }
 }
 
 #[test]
 fn grad_conv2d_weight() {
     // Input: [1, 1, 4, 4], Weight: [1, 1, 3, 3]
     // Simple 3x3 convolution on 4x4 input
-    let input_data = Array4::<f32>::from_shape_fn((1, 1, 4, 4), |(_, _, h, w)| {
-        (h * 4 + w) as f32 / 16.0
-    }).into_dyn();
+    let input_data =
+        Array4::<f32>::from_shape_fn((1, 1, 4, 4), |(_, _, h, w)| (h * 4 + w) as f32 / 16.0)
+            .into_dyn();
 
-    let weight_data = Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| {
-        (h * 3 + w + 1) as f32 / 10.0
-    }).into_dyn();
+    let weight_data =
+        Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| (h * 3 + w + 1) as f32 / 10.0)
+            .into_dyn();
 
     let inputs: HashMap<String, ArrayD<f32>> = [
         ("input".to_string(), input_data),
         ("weight".to_string(), weight_data),
-    ].into_iter().collect();
+    ]
+    .into_iter()
+    .collect();
 
     GradTest {
         builder: Box::new(|t| {
@@ -286,18 +295,20 @@ fn grad_conv2d_weight() {
 #[test]
 fn grad_conv2d_input() {
     // Input: [1, 1, 4, 4], Weight: [1, 1, 3, 3]
-    let input_data = Array4::<f32>::from_shape_fn((1, 1, 4, 4), |(_, _, h, w)| {
-        (h * 4 + w) as f32 / 16.0
-    }).into_dyn();
+    let input_data =
+        Array4::<f32>::from_shape_fn((1, 1, 4, 4), |(_, _, h, w)| (h * 4 + w) as f32 / 16.0)
+            .into_dyn();
 
-    let weight_data = Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| {
-        (h * 3 + w + 1) as f32 / 10.0
-    }).into_dyn();
+    let weight_data =
+        Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| (h * 3 + w + 1) as f32 / 10.0)
+            .into_dyn();
 
     let inputs: HashMap<String, ArrayD<f32>> = [
         ("input".to_string(), input_data),
         ("weight".to_string(), weight_data),
-    ].into_iter().collect();
+    ]
+    .into_iter()
+    .collect();
 
     GradTest {
         builder: Box::new(|t| {
@@ -316,18 +327,20 @@ fn grad_conv2d_input() {
 #[test]
 fn grad_conv2d_with_padding() {
     // Test convolution with padding
-    let input_data = Array4::<f32>::from_shape_fn((1, 1, 4, 4), |(_, _, h, w)| {
-        (h * 4 + w + 1) as f32 / 16.0
-    }).into_dyn();
+    let input_data =
+        Array4::<f32>::from_shape_fn((1, 1, 4, 4), |(_, _, h, w)| (h * 4 + w + 1) as f32 / 16.0)
+            .into_dyn();
 
-    let weight_data = Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| {
-        (h * 3 + w + 1) as f32 / 10.0
-    }).into_dyn();
+    let weight_data =
+        Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| (h * 3 + w + 1) as f32 / 10.0)
+            .into_dyn();
 
     let inputs: HashMap<String, ArrayD<f32>> = [
         ("input".to_string(), input_data),
         ("weight".to_string(), weight_data),
-    ].into_iter().collect();
+    ]
+    .into_iter()
+    .collect();
 
     GradTest {
         builder: Box::new(|t| {
@@ -346,18 +359,20 @@ fn grad_conv2d_with_padding() {
 #[test]
 fn grad_conv2d_with_stride() {
     // Test convolution with stride
-    let input_data = Array4::<f32>::from_shape_fn((1, 1, 6, 6), |(_, _, h, w)| {
-        (h * 6 + w + 1) as f32 / 36.0
-    }).into_dyn();
+    let input_data =
+        Array4::<f32>::from_shape_fn((1, 1, 6, 6), |(_, _, h, w)| (h * 6 + w + 1) as f32 / 36.0)
+            .into_dyn();
 
-    let weight_data = Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| {
-        (h * 3 + w + 1) as f32 / 10.0
-    }).into_dyn();
+    let weight_data =
+        Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| (h * 3 + w + 1) as f32 / 10.0)
+            .into_dyn();
 
     let inputs: HashMap<String, ArrayD<f32>> = [
         ("input".to_string(), input_data),
         ("weight".to_string(), weight_data),
-    ].into_iter().collect();
+    ]
+    .into_iter()
+    .collect();
 
     GradTest {
         builder: Box::new(|t| {
@@ -378,16 +393,20 @@ fn grad_conv2d_multi_channel() {
     // Test multi-channel convolution: input [1, 2, 4, 4], weight [3, 2, 3, 3]
     let input_data = Array4::<f32>::from_shape_fn((1, 2, 4, 4), |(_, c, h, w)| {
         (c * 16 + h * 4 + w + 1) as f32 / 32.0
-    }).into_dyn();
+    })
+    .into_dyn();
 
     let weight_data = Array4::<f32>::from_shape_fn((3, 2, 3, 3), |(oc, ic, h, w)| {
         (oc * 18 + ic * 9 + h * 3 + w + 1) as f32 / 100.0
-    }).into_dyn();
+    })
+    .into_dyn();
 
     let inputs: HashMap<String, ArrayD<f32>> = [
         ("input".to_string(), input_data),
         ("weight".to_string(), weight_data),
-    ].into_iter().collect();
+    ]
+    .into_iter()
+    .collect();
 
     GradTest {
         builder: Box::new(|t| {

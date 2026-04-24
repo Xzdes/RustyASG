@@ -1,420 +1,254 @@
 # RustyASG Roadmap
 
-This document describes the development plan for the RustyASG project and current implementation progress.
+This document tracks what is already implemented and where the project is
+heading next.
 
-## Current Status
+## Current status
 
-RustyASG is in active development. Most basic components of a production-ready deep learning framework have been implemented.
+RustyASG v0.3.1 is a polished, published-ready crate. The library is
+clippy-clean under `-D warnings`, rustdoc builds strictly with
+`RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links"`, and the full test
+suite (141 tests: 87 lib + 46 GPU + 8 grad check) is green on every
+supported platform in CI.
 
-### Implemented Components
+## Implemented
 
-#### Framework Core
+### Framework core
 - [x] ASG (Abstract Semantic Graph) architecture
 - [x] Define-then-run execution model
-- [x] Tensor API
-- [x] CPU Backend (ndarray)
-- [x] GPU Backend (wgpu/WebGPU)
-- [x] Shape Inference and static analysis
-- [x] Interactive graph visualization (egui)
+- [x] Symbolic `Tensor` API
+- [x] CPU backend (`ndarray`)
+- [x] GPU backend (`wgpu` — Vulkan/Metal/DX12/WebGPU)
+- [x] Shape inference and static analysis
+- [x] Interactive graph visualiser (`egui`)
 
-#### Automatic Differentiation
-- [x] Graph-to-graph autograd
-- [x] Support for basic operations (Add, Sub, Mul, Div, MatMul)
-- [x] ReLU and its gradient
-- [x] Softmax and its gradient
-- [x] Sigmoid, Tanh, Exp, Log, Neg and their gradients
-- [x] LeakyReLU, ELU, GELU, SiLU, Softplus, Abs, Clamp gradients
-- [x] Power and its gradient
-- [x] MaxPool2d and its gradient (via MaxUnpool2d)
-- [x] AvgPool2d and its gradient (via AvgUnpool2d)
-- [x] Embedding and its gradient (EmbeddingGrad scatter-add)
-- [x] LayerNorm autograd (full implementation with LayerNormBackward, LayerNormGradGamma, LayerNormGradBeta)
-- [x] Conv2d autograd (backward pass via Conv2dBackwardInput and Conv2dBackwardWeight)
+### Automatic differentiation
+- [x] Graph-to-graph autograd (the gradient is itself a separate ASG)
+- [x] Arithmetic: Add, Sub, Mul, Div, MatMul, Power
+- [x] Activations: ReLU, Sigmoid, Tanh, Softmax, GELU, SiLU, LeakyReLU,
+      ELU, Softplus, Abs, Clamp
+- [x] Reductions: Sum, Mean, Variance
+- [x] Pooling gradients: MaxPool2d (MaxUnpool2d), AvgPool2d (AvgUnpool2d)
+- [x] Embedding gradient (EmbeddingGrad, scatter-add)
+- [x] LayerNorm backward: specialised `LayerNormBackward`,
+      `LayerNormGradGamma`, `LayerNormGradBeta`
+- [x] Conv2d backward: `Conv2dBackwardInput` and `Conv2dBackwardWeight`
+- [x] Slice / Concat gradients (enables end-to-end RoPE)
 - [x] Transpose and reshape
 
-#### Neural Network Layers (`nn`)
-- [x] Linear (fully connected layer)
-- [x] LayerNorm (full autograd support)
-- [x] BatchNorm
-- [x] Dropout and SpatialDropout
-- [x] Conv2d (2D convolution with padding, stride, dilation, groups)
-- [x] ConvTranspose2d (transposed convolution)
-- [x] MaxPool2d
-- [x] AvgPool2d
-- [x] AdaptiveAvgPool2d (Global Average Pooling)
-- [x] Embedding (lookup layer for NLP)
+### Neural network layers (`nn`)
+- [x] `Linear` — declarative API with `ParameterRegistry`
+- [x] `LayerNorm`, `BatchNorm`
+- [x] `Dropout`, `SpatialDropout`
+- [x] `Conv2d` (stride, padding, dilation, groups)
+- [x] `ConvTranspose2d`
+- [x] `MaxPool2d`, `AvgPool2d`, `AdaptiveAvgPool2d` (global pooling)
+- [x] `Embedding` (lookup layer for NLP)
+- [x] `MultiHeadAttention` with causal and padding masks
+- [x] `TransformerBlock` (Pre-LN residual block)
+- [x] `FeedForward`
 
-#### Positional Encoding
-- [x] Sinusoidal Positional Encoding
-- [x] Learned Positional Embedding
-- [x] Rotary Position Embeddings (RoPE)
+### Positional encodings
+- [x] Sinusoidal positional encoding
+- [x] Learned positional embedding
+- [x] **Rotary Position Embedding (RoPE)** — full split-half
+      implementation via `Slice` + `Concat` (v0.3.1)
 - [x] ALiBi
 
-#### Attention
-- [x] Multi-Head Attention with masks (causal, padding)
-- [x] Scaled Dot-Product Attention
-- [x] Cross-Attention support
+### Weight initialisers (`nn::init`)
+- [x] Zeros, Ones, Constant
+- [x] Uniform, Normal (with mean/std)
+- [x] Xavier uniform/normal
+- [x] Kaiming uniform/normal
 
-#### Activation Functions
-- [x] ReLU
-- [x] LeakyReLU
-- [x] GELU
-- [x] SiLU/Swish
-- [x] Tanh
-- [x] Sigmoid
-- [x] ELU
-- [x] Softplus
-- [x] Softmax
-
-#### Optimizers
-- [x] SGD (with momentum, weight decay, Nesterov)
-- [x] Adam
-- [x] AdamW
+### Optimisers
+- [x] SGD (momentum, weight decay, Nesterov)
+- [x] Adam, AdamW
 - [x] RMSprop
 
-#### Learning Rate Schedulers
-- [x] StepLR
-- [x] ExponentialLR
+### Learning-rate schedulers
+- [x] StepLR, ExponentialLR
 - [x] CosineAnnealingLR
 - [x] LinearWarmupLR
 - [x] WarmupCosineAnnealingLR
 
-#### Gradient Clipping
-- [x] clip_grad_norm
-- [x] clip_grad_value
+### Gradient clipping
+- [x] `clip_grad_norm`, `clip_grad_value`
 
-#### Loss Functions
-- [x] MSE Loss
-- [x] L1 Loss
-- [x] Smooth L1 / Huber Loss
-- [x] Cross Entropy Loss (with label smoothing)
-- [x] Binary Cross Entropy
-- [x] BCE with Logits
-- [x] KL Divergence
-- [x] NLL Loss
-- [x] Hinge Loss
-- [x] Focal Loss
-- [x] Cosine Embedding Loss
-- [x] Triplet Margin Loss
-- [x] Margin Ranking Loss
+### Loss functions
+- [x] MSE, L1, Smooth-L1 / Huber
+- [x] Cross-entropy (with optional label smoothing)
+- [x] Binary cross-entropy, BCE-with-logits
+- [x] KL divergence, NLL
+- [x] Hinge, squared hinge, focal
+- [x] Cosine embedding, triplet margin, margin ranking
 
-#### Serialization
-- [x] SafeTensors format (save/load)
-- [x] Checkpoint system (weights + optimizer state + metadata)
-- [x] CheckpointManager (automatic rotation)
+### Serialization
+- [x] SafeTensors save/load
+- [x] Checkpoint system (weights + optimiser state + metadata)
+- [x] `CheckpointManager` with automatic rotation
 
-#### Data Pipeline
-- [x] Dataset trait and InMemoryDataset
-- [x] MapDataset (lazy transforms)
-- [x] ConcatDataset
-- [x] SubsetDataset
-- [x] train_test_split
-- [x] DataLoader with batching
-- [x] Samplers (Sequential, Random, Weighted, Batch)
-- [x] Transforms (Normalize, MinMaxScale, OneHot, Clip, Log, Flatten, RandomNoise)
+### Data pipeline
+- [x] `Dataset` trait, `InMemoryDataset`
+- [x] `MapDataset` (lazy transforms)
+- [x] `ConcatDataset`, `SubsetDataset`
+- [x] `train_test_split`
+- [x] `DataLoader` with batching
+- [x] Samplers: Sequential, Random, Weighted, Batch
+- [x] Transforms: Normalize, MinMaxScale, OneHot, Clip, Log, Flatten,
+      RandomNoise
 
-#### Metrics
-- [x] Classification: Accuracy, Precision, Recall, F1Score
-- [x] Confusion Matrix (Binary and MultiClass)
-- [x] TopKAccuracy
-- [x] Regression: MSE, RMSE, MAE, R², MAPE, ExplainedVariance, MaxError
-- [x] Running statistics (RunningMean, RunningStd, EMA)
-- [x] MetricLogger
-- [x] EarlyStopping
+### Metrics
+- [x] Classification: Accuracy, Precision, Recall, F1-score
+- [x] Binary and multi-class confusion matrices
+- [x] Top-K accuracy
+- [x] Regression: MSE, RMSE, MAE, R², MAPE, explained variance, max error
+- [x] Running statistics: `RunningMean`, `RunningStd`, EMA
+- [x] `MetricLogger`
+- [x] `EarlyStopping`
 
----
-
-## Development Plan
-
-### Phase 1: Critical Fixes (High Priority)
-
-#### 1.1 ~~Fix LayerNorm autograd~~ ✅ DONE
-**Status:** Completed
-**Description:**
-Implemented specialized NodeType operations for correct autograd:
-- `LayerNorm` - forward pass
-- `LayerNormBackward` - gradient w.r.t. input x considering dependencies through mean and variance
-- `LayerNormGradGamma` - gradient w.r.t. gamma parameter
-- `LayerNormGradBeta` - gradient w.r.t. beta parameter
-
-All gradient check tests pass.
-
-#### 1.2 ~~Conv2d autograd~~ ✅ DONE
-**Status:** Completed
-**Description:**
-Implemented backward operations for Conv2d:
-- `Conv2dBackwardInput` - gradient w.r.t. input (transposed convolution)
-- `Conv2dBackwardWeight` - gradient w.r.t. weights
-
-All gradient check tests pass (5 tests: basic, with_padding, with_stride, multi_channel, input).
+### CI / release engineering
+- [x] GitHub Actions matrix — Linux / Windows / macOS
+- [x] Strict `cargo fmt --check`
+- [x] Strict `cargo clippy --all-targets -- -D warnings`
+- [x] Strict `cargo doc` with `-D rustdoc::broken_intra_doc_links`
+- [x] Full `Cargo.toml` metadata (rust-version, homepage, docs URL, …)
+- [x] `[package.metadata.docs.rs]` for nice docs.rs builds
+- [x] Thin-LTO release profile, `strip = "debuginfo"`
+- [x] `exclude = ["logo.png", ...]` — published crate stays small
 
 ---
 
-### Phase 2: Convolution Operations (Medium Priority)
-
-#### 2.1 Conv2d ✅ DONE
-**Status:** Completed
-**Description:**
-2D convolution fully implemented with autograd support.
-
-**Implemented:**
-- [x] NodeType::Conv2d with parameters (kernel_size, stride, padding, dilation, groups)
-- [x] CPU implementation (im2col + matmul)
-- [x] Autograd for Conv2d (Conv2dBackwardInput, Conv2dBackwardWeight)
-- [ ] GPU implementation (WGSL shader)
-- [ ] Depthwise and Grouped convolutions
-
-#### 2.2 Pooling Operations
-**Status:** Pending
-**Complexity:** Medium
-
-**Tasks:**
-- [ ] MaxPool2d (with index return for backward)
-- [ ] AvgPool2d
-- [ ] AdaptiveAvgPool2d
-- [ ] AdaptiveMaxPool2d
-- [ ] GlobalAveragePooling
-
-#### 2.3 Transposed Convolution
-**Status:** Pending
-**Complexity:** Medium
-
-**Tasks:**
-- [ ] ConvTranspose2d for decoders and generative models
-
----
-
-### Phase 3: Transformer Support Extension
-
-#### 3.1 Multi-Head Attention
-**Status:** Pending
-**Complexity:** Medium
-**Description:**
-Full MHA implementation with masks.
-
-**Tasks:**
-- [ ] Scaled Dot-Product Attention
-- [ ] Multi-Head Attention with projections
-- [ ] Attention masks (causal, padding)
-- [ ] Flash Attention optimization (GPU)
-
-#### 3.2 Positional Encoding
-**Status:** In Progress
-
-**Tasks:**
-- [x] Sinusoidal Positional Encoding
-- [x] Learned Positional Embeddings
-- [ ] Rotary Position Embeddings (RoPE)
-- [ ] ALiBi
-
-#### 3.3 Embedding Layers
-**Status:** Done ✅
-
-**Tasks:**
-- [x] nn::Embedding
-- [ ] nn::EmbeddingBag
-
----
-
-### Phase 4: Performance Optimizations
-
-#### 4.1 Kernel Fusion
-**Status:** Pending
-**Complexity:** High
-**Description:**
-Combining sequential operations into a single WGSL shader.
-
-**Tasks:**
-- [ ] Pattern detection for fusable operations
-- [ ] Code generation for fused kernels
-- [ ] Bias + Activation fusion
-- [ ] LayerNorm fusion
-
-#### 4.2 Memory Management
-**Status:** Pending
-**Complexity:** Medium
-
-**Tasks:**
-- [ ] GPU Buffer pooling
-- [ ] Memory reuse analysis
-- [ ] Gradient checkpointing
-- [ ] Mixed precision support (f16)
-
-#### 4.3 Parallelization
-**Status:** Pending
-
-**Tasks:**
-- [ ] Data parallelism (multi-GPU)
-- [ ] Async data loading
-- [ ] Pipeline parallelism
-
----
-
-### Phase 5: Ecosystem Extension
-
-#### 5.1 Model Zoo
-**Status:** Pending
-
-**Tasks:**
-- [ ] MLP
-- [ ] CNN (LeNet, ResNet blocks)
-- [ ] Transformer Encoder/Decoder
-- [ ] GPT-style model
-- [ ] Vision Transformer (ViT)
-
-#### 5.2 Pre-trained Models
-**Status:** Pending
-
-**Tasks:**
-- [ ] Load weights from HuggingFace (SafeTensors)
-- [ ] Converter from PyTorch checkpoint
-- [ ] Model Hub integration
-
-#### 5.3 Datasets
-**Status:** Pending
-
-**Tasks:**
-- [ ] MNIST loader
-- [ ] CIFAR-10/100 loader
-- [ ] ImageNet loader
-- [ ] Text datasets (tokenization)
-
----
-
-### Phase 6: Developer Experience
-
-#### 6.1 Visualizer Improvements
-**Status:** Pending
-
-**Tasks:**
-- [ ] Toggle between forward/gradient graphs
-- [ ] Detailed node information (hover)
-- [ ] Path highlighting
-- [ ] Export graph to PNG/SVG
-- [ ] Node search
-
-#### 6.2 Debugging and Profiling
-**Status:** Pending
-
-**Tasks:**
-- [ ] Tensor value inspection
-- [ ] Gradient checking utilities
-- [ ] Memory profiler
-- [ ] Performance profiler
-- [ ] Operation timing
-
-#### 6.3 Documentation
-**Status:** Pending
-
-**Tasks:**
-- [ ] API documentation (rustdoc)
-- [ ] Tutorials
-- [ ] Examples (MNIST, Text classification)
-- [ ] Architecture guide
-
----
-
-### Phase 7: Production Features
-
-#### 7.1 Model Export
-**Status:** Pending
-
-**Tasks:**
-- [ ] ONNX export
-- [ ] TorchScript-like serialization
-- [ ] Inference-only mode (without autograd overhead)
-
-#### 7.2 Deployment
-**Status:** Pending
-
-**Tasks:**
-- [ ] WebAssembly target
-- [ ] Mobile support (iOS/Android via wgpu)
-- [ ] Server deployment utilities
-
-#### 7.3 Distributed Training
-**Status:** Future
-
-**Tasks:**
-- [ ] Distributed data parallel
-- [ ] Gradient synchronization
-- [ ] Model sharding
-
----
-
-## Priorities
-
-### Critical (blocking production use)
-1. ~~LayerNorm autograd fix~~ ✅ DONE
-2. ~~Conv2d operation~~ ✅ DONE
-3. Improved error messages (in progress)
-
-### High (significantly improve usability)
-1. ~~Multi-Head Attention~~ ✅ DONE
-2. Model checkpointing improvements
-3. Better documentation
-
-### Medium (nice to have)
-1. Kernel fusion
-2. Model zoo
-3. Visualizer improvements
-
-### Low (future)
-1. Distributed training
-2. WebAssembly deployment
-3. Mobile support
-
----
-
-## Comparison with Competitors
+## Comparison with other Rust DL frameworks
 
 | Feature | RustyASG | Burn | Candle | PyTorch |
 |---------|----------|------|--------|---------|
 | Language | Rust | Rust | Rust | Python/C++ |
-| Graph Model | Define-then-run | Eager | Eager | Both |
-| GPU Backend | wgpu | wgpu/CUDA | CUDA | CUDA |
-| Visualization | Built-in | No | No | TensorBoard |
-| Autograd | Graph-to-graph | Tape | Tape | Tape |
+| Execution | Define-then-run | Eager | Eager | Both |
+| GPU backend | `wgpu` | `wgpu`/CUDA | CUDA | CUDA |
+| Visualisation | **Built-in** | No | No | TensorBoard |
+| Autograd | **Graph-to-graph** | Tape | Tape | Tape |
 | SafeTensors | Yes | Yes | Yes | Yes |
-| Transformers | Partial | Yes | Yes | Yes |
-| Conv2d | Planned | Yes | Yes | Yes |
-| Distributed | No | Yes | No | Yes |
+| Transformers | Yes | Yes | Yes | Yes |
+| Conv2d | Yes | Yes | Yes | Yes |
+| Distributed | Planned | Yes | No | Yes |
 | WebAssembly | Planned | Yes | No | No |
 
-### Unique Advantages of RustyASG
-1. **Built-in graph visualization** - unique debugging capability
-2. **Define-then-run** - enables global optimizations
-3. **Pure Rust architecture** - no Python/C++ dependencies
-4. **Educational value** - well-structured code
+### What makes RustyASG unique
+1. **Built-in real-time graph visualisation** — nothing comparable in the
+   Rust DL space.
+2. **Define-then-run** enables global optimisations (kernel fusion,
+   memory planning).
+3. **Pure Rust** — no Python interpreter, no CUDA-SDK install dance.
+4. **Educational** — a readable end-to-end reference for how modern DL
+   frameworks work.
 
 ---
 
-## Contributing
+## Release history
 
-We welcome contributions to the project! Especially valuable are:
+### v0.3.1 — Pre-release polish (April 2026)
+- `cargo fmt` applied across the full tree.
+- `cargo clippy --all-targets -- -D warnings` clean everywhere; library
+  only allows three deliberate design-motivated lints
+  (`too_many_arguments`, `type_complexity`, `should_implement_trait`).
+- Strict `cargo doc` passes — 10 previously-broken intra-doc links
+  fixed.
+- Extended `Cargo.toml` metadata, thin-LTO release profile, `exclude`
+  list so the published crate is small (no `logo.png`).
+- CI split into four dedicated jobs: fmt / clippy / doc / test-matrix.
+- New `cnn_classifier` example: first full Conv2d-based example
+  (Conv2d + pool + Linear + Adam), 100% accuracy on a tiny synthetic
+  dataset.
+- Dual-language README (`README.md` + `README.ru.md`), entire project
+  documentation converted to English.
 
-1. **Bug reports** - especially related to autograd
-2. **Performance improvements** - GPU optimizations
-3. **New operations** - Conv2d, Attention, etc.
-4. **Documentation** - examples, tutorials
-5. **Testing** - gradient checking, edge cases
+### v0.3.0 — Declarative layer API + GPU completeness (April 2026)
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+**Phase 2 — API reliability**
+- Declarative `ParameterRegistry`. Every `nn::*` layer registers its
+  parameter shapes and initialisers with `GraphContext`:
+  ```rust
+  let fc = Linear::new(&ctx, "fc1", 784, 128);        // shapes auto-registered
+  ctx.borrow().init_parameters(&mut runtime_data);    // Xavier / Zeros sampled
+  ShapeInference::run_with_context(&mut g, &ctx.borrow(), &inputs)?;
+  ```
+- New `nn::init` module with 9 standard initialisers.
+- `Tensor::new_parameter_with_shape(ctx, name, shape, init)` —
+  preferred constructor for trainable weights.
+- `GraphContext::{register_parameter_meta, parameter_meta,
+  parameter_registry, build_shape_map, init_parameters}`.
+- **Breaking**: every `nn::*` layer constructor now takes dimension
+  arguments. `main.rs` no longer uses string-matching to infer
+  parameter shapes (`name.contains("w_q")` is gone).
+
+**Phase 3 — GPU completeness**
+- `LayerNorm` forward plus three backward WGSL shaders
+  (`LayerNormBackward`, `LayerNormGradGamma`, `LayerNormGradBeta`).
+  `TransformerBlock` trains end-to-end on GPU.
+- `Conv2dBackwardInput`, `Conv2dBackwardWeight` (groups=1, dilation=(1,1)).
+- `MaxPool2d`, `MaxUnpool2d`, `AvgPool2d`, `AvgUnpool2d`,
+  `AdaptiveAvgPool2d`.
+- `Embedding`, `EmbeddingGrad`.
+- `ConvTranspose2d` forward with bias.
+- `dispatch_rowwise` helper for per-row / per-column WGSL kernels.
+
+**Phase 5 — Ecosystem polish**
+- `Slice`, `Concat`, `SliceBackward` primitives with full CPU + GPU +
+  shape inference + autograd support.
+- `Tensor::slice(axis, start, end)` and `Tensor::concat(others, axis)`
+  methods.
+- **Full RoPE** via `Slice` + `Concat` —
+  `[x1, x2] → [x1·cos - x2·sin, x1·sin + x2·cos]`, mathematically
+  correct and end-to-end differentiable. Previously a stub that added
+  `cos` as bias.
+- GitHub Actions CI, `CHANGELOG.md`, `CONTRIBUTING.md`.
+
+### v0.2.0 — Phase 1 cleanup (January 2026)
+- `main.rs` refactored to consume the library via `use rustyasg::*`
+  (eliminated ~100 false-positive warnings).
+- Deprecated `rand::thread_rng` → `rand::rng`.
+- All unused imports / variables across the tree fixed.
+- Reached 0 warnings in `cargo build --release --all-targets`.
+
+### v0.1.0 — Core (pre-history)
+ASG, autograd, CPU + basic GPU ops, initial layer zoo, optimizers,
+SafeTensors, interactive visualiser.
 
 ---
 
-## Timeline
+## Planned for v0.5 — Performance & production
 
-| Milestone | Target | Status |
-|-----------|--------|--------|
-| v0.1 - Core | Done | ✅ |
-| v0.2 - Training Utils | Done | ✅ |
-| v0.3 - Data Pipeline | Done | ✅ |
-| v0.4 - Metrics | Done | ✅ |
-| v0.5 - Conv2d | Q1 2026 | Planned |
-| v0.6 - Transformers | Q2 2026 | Planned |
-| v1.0 - Production Ready | Q4 2026 | Planned |
+- **Inference-only mode.** Skip autograd overhead when only forward is
+  needed.
+- **Kernel fusion.** Combine `MatMul + Bias + Activation` into a single
+  WGSL kernel; fuse LayerNorm sub-ops.
+- **GPU buffer pool.** Reuse allocations between training steps instead
+  of allocating fresh each epoch.
+- **Mixed precision (f16).** GPU-side f16 with loss-scaling.
+- **Better errors.** Replace remaining ~125 `unwrap()` call sites in
+  library code with typed `RustyAsgError`.
+- **Criterion benchmarks.** Measured comparisons against Burn and
+  Candle on representative workloads.
+- **Tiny GPT block.** End-to-end GPT-style example (needs causal
+  masking + multi-batch training).
+- **Vision Transformer starter.** Patch embedding + TransformerBlock
+  stack.
+
+## Planned for v1.0 — Production ready
+
+- **Model zoo.** ResNet, MobileNet, GPT-2 small, ViT — loadable with
+  one function call.
+- **HuggingFace weight loader.** SafeTensors → RustyASG, plus
+  PyTorch-checkpoint converter.
+- **Dataset loaders.** MNIST, CIFAR-10/100, ImageNet, common text
+  datasets with tokenisers.
+- **ONNX export.** `asg_to_onnx()` round-trip.
+- **Multi-GPU / distributed.** Data-parallel then model-parallel.
+- **WebAssembly target.** Browser-resident training and inference.
+- **Profiling and debugging tooling.** Tensor inspection, memory
+  profiler, operation timing, path highlighting in the visualiser.
 
 ---
 
-*Last updated: January 2026*
+*Last updated: April 2026.*

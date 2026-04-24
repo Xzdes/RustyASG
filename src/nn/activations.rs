@@ -1,6 +1,6 @@
-//! Модуль, содержащий слои-активации для графовой архитектуры.
+//! Activation layers for the graph-based architecture.
 //!
-//! Включает реализации популярных функций активации:
+//! Includes implementations of popular activation functions:
 //! - ReLU (Rectified Linear Unit)
 //! - LeakyReLU
 //! - GELU (Gaussian Error Linear Unit)
@@ -17,10 +17,10 @@ use crate::tensor::Tensor;
 // ReLU - Rectified Linear Unit
 // ============================================================================
 
-/// Слой активации ReLU: `f(x) = max(0, x)`
+/// ReLU activation layer: `f(x) = max(0, x)`.
 ///
-/// Самая популярная функция активации для скрытых слоев.
-/// Вычислительно эффективна и хорошо работает на практике.
+/// The most popular activation function for hidden layers. It is
+/// computationally cheap and works well in practice.
 pub struct ReLU;
 
 impl ReLU {
@@ -49,19 +49,19 @@ impl Module for ReLU {
 // LeakyReLU
 // ============================================================================
 
-/// Слой активации LeakyReLU: `f(x) = x if x > 0 else alpha * x`
+/// LeakyReLU activation layer: `f(x) = x if x > 0 else alpha * x`.
 ///
-/// Решает проблему "умирающих нейронов" ReLU, позволяя небольшой
-/// градиент для отрицательных значений.
+/// Addresses the "dying ReLU" problem by allowing a small gradient for
+/// negative values.
 ///
-/// Популярен в GAN архитектурах.
+/// Common in GAN architectures.
 pub struct LeakyReLU {
-    /// Наклон для отрицательных значений (обычно 0.01 или 0.2)
+    /// Slope for negative values (usually 0.01 or 0.2).
     pub negative_slope: f32,
 }
 
 impl LeakyReLU {
-    /// Создаёт LeakyReLU с указанным наклоном.
+    /// Creates a LeakyReLU with the given negative slope.
     pub fn new(negative_slope: f32) -> Self {
         Self { negative_slope }
     }
@@ -77,7 +77,7 @@ impl Module for LeakyReLU {
     fn forward(&self, inputs: &Tensor) -> Tensor {
         // LeakyReLU(x) = max(0, x) + negative_slope * min(0, x)
         // = relu(x) - negative_slope * relu(-x)
-        // Для упрощения используем: x * (x > 0) + negative_slope * x * (x <= 0)
+        // Equivalently: x * (x > 0) + negative_slope * x * (x <= 0)
         inputs.leaky_relu(self.negative_slope)
     }
 
@@ -90,12 +90,12 @@ impl Module for LeakyReLU {
 // GELU - Gaussian Error Linear Unit
 // ============================================================================
 
-/// Слой активации GELU: `f(x) = x * Φ(x)`
+/// GELU activation layer: `f(x) = x * Φ(x)`.
 ///
-/// где Φ(x) - CDF стандартного нормального распределения.
+/// where `Φ(x)` is the CDF of the standard normal distribution.
 ///
-/// Используется в BERT, GPT и других трансформерных архитектурах.
-/// Обеспечивает гладкую нелинейность.
+/// Used in BERT, GPT and other transformer architectures. Provides a
+/// smooth nonlinearity.
 pub struct GELU;
 
 impl GELU {
@@ -124,12 +124,12 @@ impl Module for GELU {
 // SiLU / Swish
 // ============================================================================
 
-/// Слой активации SiLU (Sigmoid Linear Unit), также известный как Swish.
+/// SiLU activation layer (Sigmoid Linear Unit), also known as Swish.
 ///
 /// `f(x) = x * sigmoid(x)`
 ///
-/// Используется в EfficientNet, Mish и других современных архитектурах.
-/// Гладкая, не-монотонная функция с хорошими свойствами оптимизации.
+/// Used in EfficientNet, Mish and other modern architectures. A smooth
+/// non-monotonic function with good optimization properties.
 pub struct SiLU;
 
 impl SiLU {
@@ -154,17 +154,17 @@ impl Module for SiLU {
     }
 }
 
-/// Алиас для SiLU - исторически известен как Swish
+/// Alias for SiLU - historically known as Swish.
 pub type Swish = SiLU;
 
 // ============================================================================
 // Tanh
 // ============================================================================
 
-/// Слой активации Tanh: `f(x) = tanh(x) = (e^x - e^-x) / (e^x + e^-x)`
+/// Tanh activation layer: `f(x) = tanh(x) = (e^x - e^-x) / (e^x + e^-x)`.
 ///
-/// Классическая S-образная функция с выходом в диапазоне (-1, 1).
-/// Часто используется в RNN/LSTM.
+/// Classic S-shaped function with output in `(-1, 1)`. Commonly used in
+/// RNN/LSTM networks.
 pub struct Tanh;
 
 impl Tanh {
@@ -193,10 +193,10 @@ impl Module for Tanh {
 // Sigmoid
 // ============================================================================
 
-/// Слой активации Sigmoid: `f(x) = 1 / (1 + e^-x)`
+/// Sigmoid activation layer: `f(x) = 1 / (1 + e^-x)`.
 ///
-/// Классическая S-образная функция с выходом в диапазоне (0, 1).
-/// Используется для бинарной классификации и gate-механизмов.
+/// Classic S-shaped function with output in `(0, 1)`. Used for binary
+/// classification and gating mechanisms.
 pub struct Sigmoid;
 
 impl Sigmoid {
@@ -225,12 +225,12 @@ impl Module for Sigmoid {
 // ELU - Exponential Linear Unit
 // ============================================================================
 
-/// Слой активации ELU: `f(x) = x if x > 0 else alpha * (e^x - 1)`
+/// ELU activation layer: `f(x) = x if x > 0 else alpha * (e^x - 1)`.
 ///
-/// Гладкая альтернатива ReLU с отрицательными значениями.
-/// Помогает ускорить обучение и улучшить обобщение.
+/// A smooth alternative to ReLU that allows negative values. Helps
+/// speed up training and improve generalization.
 pub struct ELU {
-    /// Параметр альфа для отрицательных значений (обычно 1.0)
+    /// Alpha parameter for negative values (usually 1.0).
     pub alpha: f32,
 }
 
@@ -260,14 +260,14 @@ impl Module for ELU {
 // Softplus
 // ============================================================================
 
-/// Слой активации Softplus: `f(x) = log(1 + e^x)`
+/// Softplus activation layer: `f(x) = log(1 + e^x)`.
 ///
-/// Гладкая аппроксимация ReLU. Всегда положительна.
-/// Производная равна sigmoid(x).
+/// A smooth approximation of ReLU. Always positive. Its derivative is
+/// `sigmoid(x)`.
 pub struct Softplus {
-    /// Параметр beta (по умолчанию 1.0)
+    /// Beta parameter (default 1.0).
     pub beta: f32,
-    /// Порог для численной стабильности
+    /// Threshold for numerical stability.
     pub threshold: f32,
 }
 
@@ -297,10 +297,10 @@ impl Module for Softplus {
 // Softmax
 // ============================================================================
 
-/// Слой Softmax: `f(x)_i = e^x_i / sum(e^x_j)`
+/// Softmax layer: `f(x)_i = e^x_i / sum(e^x_j)`.
 ///
-/// Преобразует вектор в распределение вероятностей.
-/// Используется для многоклассовой классификации.
+/// Converts a vector into a probability distribution. Used for
+/// multi-class classification.
 pub struct Softmax;
 
 impl Softmax {

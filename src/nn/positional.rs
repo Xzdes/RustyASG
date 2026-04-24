@@ -107,9 +107,9 @@ impl SinusoidalPositionalEncoding {
     /// # Returns
     ///
     /// Tensor of shape [seq_len, d_model]
-    pub fn get_encoding(&self, seq_len: usize) -> &Tensor {
-        // In current implementation returns full tensor
-        // Slice operation will be performed at runtime
+    pub fn get_encoding(&self, _seq_len: usize) -> &Tensor {
+        // TODO (Phase 3): implement actual slicing by seq_len when Slice op is available.
+        // Current implementation returns the full tensor — broadcasting handles shorter inputs.
         &self.encoding
     }
 }
@@ -174,7 +174,15 @@ impl LearnedPositionalEmbedding {
         embedding_dim: usize,
         name: &str,
     ) -> Self {
-        let weight = Tensor::new_parameter(context, &format!("{}_weight", name));
+        let weight = Tensor::new_parameter_with_shape(
+            context,
+            &format!("{}_weight", name),
+            vec![max_len, embedding_dim],
+            crate::nn::init::Initializer::Normal {
+                mean: 0.0,
+                std: 0.02,
+            },
+        );
 
         Self {
             max_len,
@@ -187,7 +195,7 @@ impl LearnedPositionalEmbedding {
     ///
     /// # Returns
     ///
-    /// Position tensor [seq_len] with values 0, 1, 2, ..., seq_len-1
+    /// Position tensor of shape `[seq_len]` with values `0, 1, 2, ..., seq_len-1`.
     pub fn create_position_ids(context: &Rc<RefCell<GraphContext>>, seq_len: usize) -> Tensor {
         let positions: Vec<f32> = (0..seq_len).map(|i| i as f32).collect();
         let data = ArrayD::from_shape_vec(IxDyn(&[seq_len]), positions).unwrap();
@@ -200,7 +208,7 @@ impl Module for LearnedPositionalEmbedding {
     ///
     /// # Arguments
     ///
-    /// * `position_ids` - Position indices tensor [seq_len] or [batch, seq_len]
+    /// * `position_ids` — position indices tensor of shape `[seq_len]` or `[batch, seq_len]`.
     ///
     /// # Returns
     ///
@@ -376,19 +384,20 @@ impl RotaryPositionEmbedding {
     }
 
     /// Applies RoPE to a single tensor.
-    fn rotate_half(&self, x: &Tensor, seq_offset: usize) -> Tensor {
-        // x: [batch, num_heads, seq_len, head_dim]
-        // Split head_dim into pairs and apply rotation
-        //
-        // For simplicity create cos and sin tensors as literals
-        // In production this should use slice operation
-
-        // Get cos and sin for needed positions
-        // Simplified version: create literals directly
+    ///
+    /// Uses the "split-half" variant (same as LLaMA / HuggingFace):
+    ///   x1 = x[..., :half_dim]
+    ///   x2 = x[..., half_dim:]
+    ///   y  = concat([x1*cos - x2*sin, x1*sin + x2*cos], axis=-1)
+    ///
+    /// This is mathematically correct RoPE and differentiable end-to-end,
+    /// since every op in the chain (Slice, Mul, Sub, Add, Concat) has a
+    /// backward rule.
+    fn rotate_half(&self, x: &Tensor, _seq_offset: usize) -> Tensor {
+        // x: [batch, num_heads, seq_len, head_dim]. Last axis index = 3.
         let half_dim = self.head_dim / 2;
 
-        // Create cos and sin tensors for current sequence
-        // Shape: [1, 1, max_len, half_dim] for broadcasting
+        // Broadcast-friendly cache shape: [1, 1, max_len, half_dim].
         let cos_tensor = Tensor::new_literal(
             &self.context,
             self.cos_cached
@@ -406,15 +415,13 @@ impl RotaryPositionEmbedding {
             "rope_sin",
         );
 
-        // Apply rotation:
-        // x_rot = x * cos + rotate_half(x) * sin
-        // where rotate_half(x) swaps pairs: [x0, x1, x2, x3, ...] -> [-x1, x0, -x3, x2, ...]
-        //
-        // For simplicity return x as is (full implementation requires slice/concat operations)
-        // TODO: Implement full rotation when slice operations are available
+        let x1 = x.slice(3, 0, half_dim);
+        let x2 = x.slice(3, half_dim, self.head_dim);
 
-        // Simplified version: add cos as bias
-        x + &cos_tensor
+        let rot1 = &(&x1 * &cos_tensor) - &(&x2 * &sin_tensor);
+        let rot2 = &(&x1 * &sin_tensor) + &(&x2 * &cos_tensor);
+
+        rot1.concat(&[&rot2], 3)
     }
 
     /// Returns precomputed cosines.
@@ -519,11 +526,9 @@ impl ALiBi {
             }
         }
 
-        let bias_arr = ArrayD::from_shape_vec(
-            IxDyn(&[1, self.num_heads, seq_len, seq_len]),
-            bias_data,
-        )
-        .unwrap();
+        let bias_arr =
+            ArrayD::from_shape_vec(IxDyn(&[1, self.num_heads, seq_len, seq_len]), bias_data)
+                .unwrap();
 
         Tensor::new_literal(&self.context, bias_arr, "alibi_bias")
     }
@@ -557,11 +562,9 @@ impl ALiBi {
             }
         }
 
-        let bias_arr = ArrayD::from_shape_vec(
-            IxDyn(&[1, self.num_heads, seq_len, seq_len]),
-            bias_data,
-        )
-        .unwrap();
+        let bias_arr =
+            ArrayD::from_shape_vec(IxDyn(&[1, self.num_heads, seq_len, seq_len]), bias_data)
+                .unwrap();
 
         Tensor::new_literal(&self.context, bias_arr, "alibi_causal_bias")
     }
@@ -746,7 +749,10 @@ mod tests {
         let pos_ids = create_position_ids(&context, 2, 4);
 
         // Set output
-        context.borrow_mut().main_graph_mut().set_output(pos_ids.node_id);
+        context
+            .borrow_mut()
+            .main_graph_mut()
+            .set_output(pos_ids.node_id);
 
         // Run
         let backend = CpuBackend::new();
@@ -779,18 +785,16 @@ mod tests {
         let output = pos_emb.forward(&pos_ids);
 
         // Set output
-        context.borrow_mut().main_graph_mut().set_output(output.node_id);
+        context
+            .borrow_mut()
+            .main_graph_mut()
+            .set_output(output.node_id);
 
         // Prepare data
-        let weight_data = ArrayD::from_shape_vec(
-            IxDyn(&[5, 3]),
-            (0..15).map(|x| x as f32).collect()
-        ).unwrap();
+        let weight_data =
+            ArrayD::from_shape_vec(IxDyn(&[5, 3]), (0..15).map(|x| x as f32).collect()).unwrap();
 
-        let pos_ids_data = ArrayD::from_shape_vec(
-            IxDyn(&[4]),
-            vec![0.0, 2.0, 4.0, 1.0]
-        ).unwrap();
+        let pos_ids_data = ArrayD::from_shape_vec(IxDyn(&[4]), vec![0.0, 2.0, 4.0, 1.0]).unwrap();
 
         let mut inputs = HashMap::new();
         inputs.insert("pos_ids".to_string(), Value::Tensor(pos_ids_data));

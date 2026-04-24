@@ -49,7 +49,10 @@ fn main() {
     let loss = mse_loss_mean(&y_pred, &y_true);
 
     // Set loss as output
-    context.borrow_mut().main_graph_mut().set_output(loss.node_id);
+    context
+        .borrow_mut()
+        .main_graph_mut()
+        .set_output(loss.node_id);
 
     // Run shape inference before building gradients
     let mut initial_shapes = HashMap::new();

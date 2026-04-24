@@ -1,49 +1,49 @@
-//! Модуль, реализующий простой интерпретатор для ASG.
+//! A simple ASG interpreter.
 //!
-//! Этот интерпретатор является "эталонным" бэкендом, который выполняет
-//! вычисления последовательно на CPU. Он обходит граф вычислений (ASG)
-//! и для каждого узла выполняет соответствующую операцию с помощью `ndarray`.
+//! This interpreter is the "reference" backend, executing computations
+//! sequentially on the CPU. It traverses the computation graph (ASG) and,
+//! for each node, performs the corresponding operation via `ndarray`.
 //!
-//! Основная задача интерпретатора - взять граф и конкретные входные данные
-//! и вернуть конечный результат.
+//! The interpreter's job is to take a graph plus concrete inputs and
+//! return the final result.
 
 use crate::asg::{Asg, AsgId, NodeId, NodeType, Value};
 use ndarray::{s, Axis, Ix2, Zip};
 use std::collections::HashMap;
 use thiserror::Error;
 
-/// Ошибки, которые могут возникнуть во время выполнения (интерпретации) графа.
+/// Errors that may occur while executing (interpreting) a graph.
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum RuntimeError {
-    #[error("Узел с ID {0} (в графе {1}) не найден")]
+    #[error("Node with ID {0} (in graph {1}) not found")]
     NodeNotFound(NodeId, AsgId),
-    #[error("Граф с ID {0} не найден в контексте выполнения")]
+    #[error("Graph with ID {0} not found in the execution context")]
     GraphNotFound(AsgId),
-    #[error("Неверный тип значения для операции: ожидался {expected}, получен {actual}")]
+    #[error("Invalid value type for operation: expected {expected}, got {actual}")]
     TypeError { expected: String, actual: String },
-    #[error("Несовместимые формы тензоров для операции: {0}")]
+    #[error("Incompatible tensor shapes for operation: {0}")]
     ShapeError(String),
-    #[error("Для выполнения графа не предоставлено значение для входа '{0}' (ID: {1})")]
+    #[error("No value provided for input '{0}' (ID: {1})")]
     MissingInput(String, NodeId),
-    #[error("Для выполнения графа не предоставлено значение для параметра '{0}' (ID: {1})")]
+    #[error("No value provided for parameter '{0}' (ID: {1})")]
     MissingParameter(String, NodeId),
-    #[error("Операция {0} еще не реализована в интерпретаторе")]
+    #[error("Operation {0} is not yet implemented in the interpreter")]
     UnimplementedOperation(String),
 }
 
-/// Контекст выполнения для одного или нескольких связанных графов.
+/// Execution context for one or more linked graphs.
 struct ExecutionContext<'a> {
-    /// Хранилище всех графов, участвующих в вычислении.
+    /// Storage for all graphs participating in the computation.
     graphs: HashMap<AsgId, &'a Asg>,
-    /// Хранилище для входных данных и обучаемых параметров.
+    /// Storage for input data and trainable parameters.
     inputs: &'a HashMap<String, Value>,
-    /// Глобальный кэш для уже вычисленных значений узлов.
-    /// Ключ - это (AsgId, NodeId).
+    /// Global cache for already computed node values.
+    /// The key is `(AsgId, NodeId)`.
     memo: HashMap<(AsgId, NodeId), Value>,
 }
 
 impl<'a> ExecutionContext<'a> {
-    /// Создает новый контекст выполнения.
+    /// Creates a new execution context.
     fn new(main_asg: &'a Asg, inputs: &'a HashMap<String, Value>) -> Self {
         let mut graphs = HashMap::new();
         graphs.insert(main_asg.id, main_asg);
@@ -54,12 +54,12 @@ impl<'a> ExecutionContext<'a> {
         }
     }
 
-    /// Добавляет связанный граф в контекст (например, граф прямого прохода).
+    /// Adds a linked graph to the context (for example, the forward-pass graph).
     pub fn add_graph(&mut self, asg: &'a Asg) {
         self.graphs.insert(asg.id, asg);
     }
 
-    /// Главная функция, которая рекурсивно вычисляет значение для заданного узла.
+    /// Main function that recursively computes the value for a given node.
     fn evaluate_node(&mut self, asg_id: AsgId, node_id: NodeId) -> Result<Value, RuntimeError> {
         if let Some(value) = self.memo.get(&(asg_id, node_id)) {
             return Ok(value.clone());
@@ -80,7 +80,7 @@ impl<'a> ExecutionContext<'a> {
             NodeType::Literal(value) => Ok(value.clone()),
             NodeType::External { source_asg_id, source_node_id } => self.evaluate_node(*source_asg_id, *source_node_id),
 
-            // Бинарные операции
+            // Binary operations
             NodeType::Add(l, r) | NodeType::Subtract(l, r) | NodeType::Multiply(l, r) | NodeType::Divide(l, r) |
             NodeType::MatrixMultiply(l, r) | NodeType::GreaterThan(l, r) | NodeType::Power(l, r) |
             NodeType::Reshape(l, r) | NodeType::Broadcast(l, r) => {
@@ -100,7 +100,7 @@ impl<'a> ExecutionContext<'a> {
                 }
             }
 
-            // Унарные операции
+            // Unary operations
             NodeType::ReLU(op) | NodeType::Sigmoid(op) | NodeType::Softmax(op) | NodeType::Sum(op) |
             NodeType::Mean(op) | NodeType::Variance(op) | NodeType::Sqrt(op) => {
                 let operand = self.evaluate_node(asg_id, *op)?;
@@ -147,7 +147,7 @@ impl Default for Interpreter {
     fn default() -> Self { Self::new() }
 }
 
-// --- Реализации операций ---
+// --- Operation implementations ---
 
 fn op_add(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a + &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) }

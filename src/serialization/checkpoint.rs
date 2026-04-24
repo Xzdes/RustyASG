@@ -1,15 +1,15 @@
-// --- Файл: src/serialization/checkpoint.rs ---
+// --- File: src/serialization/checkpoint.rs ---
 
-//! Модуль для создания и загрузки чекпоинтов модели.
+//! Module for creating and loading model checkpoints.
 //!
-//! Чекпоинт включает:
-//! - Веса модели (в формате SafeTensors)
-//! - Состояние оптимизатора
-//! - Метаданные обучения (эпоха, loss, и т.д.)
-//! - Конфигурацию модели
+//! A checkpoint includes:
+//! - Model weights (in SafeTensors format)
+//! - Optimizer state
+//! - Training metadata (epoch, loss, etc.)
+//! - Model configuration
 
+use super::safetensors_io::{load_safetensors, save_safetensors, SafeTensorsError};
 use crate::asg::Value;
-use super::safetensors_io::{save_safetensors, load_safetensors, SafeTensorsError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -17,48 +17,48 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-/// Ошибки при работе с чекпоинтами
+/// Errors that may occur while working with checkpoints.
 #[derive(Error, Debug)]
 pub enum CheckpointError {
-    #[error("Ошибка ввода/вывода: {0}")]
+    #[error("I/O error: {0}")]
     IoError(#[from] std::io::Error),
 
-    #[error("Ошибка SafeTensors: {0}")]
+    #[error("SafeTensors error: {0}")]
     SafeTensorsError(#[from] SafeTensorsError),
 
-    #[error("Ошибка JSON: {0}")]
+    #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
 
-    #[error("Директория чекпоинта не существует: {0}")]
+    #[error("Checkpoint directory does not exist: {0}")]
     DirectoryNotFound(PathBuf),
 
-    #[error("Файл не найден: {0}")]
+    #[error("File not found: {0}")]
     FileNotFound(PathBuf),
 
-    #[error("Неверный формат чекпоинта")]
+    #[error("Invalid checkpoint format")]
     InvalidFormat,
 }
 
 type Result<T> = std::result::Result<T, CheckpointError>;
 
-/// Конфигурация чекпоинта
+/// Checkpoint configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointConfig {
-    /// Версия формата чекпоинта
+    /// Checkpoint format version.
     pub version: String,
-    /// Название модели
+    /// Model name.
     pub model_name: Option<String>,
-    /// Текущая эпоха
+    /// Current epoch.
     pub epoch: usize,
-    /// Глобальный шаг обучения
+    /// Global training step.
     pub global_step: usize,
-    /// Текущий learning rate
+    /// Current learning rate.
     pub learning_rate: f32,
-    /// Последнее значение loss
+    /// Most recent loss value.
     pub last_loss: Option<f32>,
-    /// Лучшее значение loss
+    /// Best observed loss value.
     pub best_loss: Option<f32>,
-    /// Дополнительные метаданные
+    /// Additional metadata.
     pub metadata: HashMap<String, String>,
 }
 
@@ -78,62 +78,62 @@ impl Default for CheckpointConfig {
 }
 
 impl CheckpointConfig {
-    /// Создает новую конфигурацию чекпоинта
+    /// Creates a new checkpoint configuration.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Устанавливает название модели
+    /// Sets the model name.
     pub fn with_model_name(mut self, name: &str) -> Self {
         self.model_name = Some(name.to_string());
         self
     }
 
-    /// Устанавливает эпоху
+    /// Sets the epoch.
     pub fn with_epoch(mut self, epoch: usize) -> Self {
         self.epoch = epoch;
         self
     }
 
-    /// Устанавливает глобальный шаг
+    /// Sets the global step.
     pub fn with_global_step(mut self, step: usize) -> Self {
         self.global_step = step;
         self
     }
 
-    /// Устанавливает learning rate
+    /// Sets the learning rate.
     pub fn with_learning_rate(mut self, lr: f32) -> Self {
         self.learning_rate = lr;
         self
     }
 
-    /// Устанавливает последний loss
+    /// Sets the last loss value.
     pub fn with_last_loss(mut self, loss: f32) -> Self {
         self.last_loss = Some(loss);
         self
     }
 
-    /// Устанавливает лучший loss
+    /// Sets the best loss value.
     pub fn with_best_loss(mut self, loss: f32) -> Self {
         self.best_loss = Some(loss);
         self
     }
 
-    /// Добавляет метаданные
+    /// Adds a metadata entry.
     pub fn with_metadata(mut self, key: &str, value: &str) -> Self {
         self.metadata.insert(key.to_string(), value.to_string());
         self
     }
 }
 
-/// Состояние оптимизатора
+/// Optimizer state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizerState {
-    /// Тип оптимизатора (SGD, Adam, и т.д.)
+    /// Optimizer type (SGD, Adam, etc.).
     pub optimizer_type: String,
-    /// Параметры оптимизатора
+    /// Optimizer parameters.
     pub params: HashMap<String, f64>,
-    /// Состояние для каждого параметра (моменты и т.д.)
+    /// Per-parameter state (moments, etc.).
     pub state: HashMap<String, Vec<f64>>,
 }
 
@@ -147,19 +147,19 @@ impl OptimizerState {
     }
 }
 
-/// Полный чекпоинт модели
+/// A complete model checkpoint.
 #[derive(Debug)]
 pub struct Checkpoint {
-    /// Конфигурация чекпоинта
+    /// Checkpoint configuration.
     pub config: CheckpointConfig,
-    /// Веса модели
+    /// Model weights.
     pub model_weights: HashMap<String, Value>,
-    /// Состояние оптимизатора (опционально)
+    /// Optional optimizer state.
     pub optimizer_state: Option<OptimizerState>,
 }
 
 impl Checkpoint {
-    /// Создает новый чекпоинт
+    /// Creates a new checkpoint.
     pub fn new(weights: HashMap<String, Value>, config: CheckpointConfig) -> Self {
         Self {
             config,
@@ -168,39 +168,39 @@ impl Checkpoint {
         }
     }
 
-    /// Добавляет состояние оптимизатора
+    /// Attaches optimizer state to the checkpoint.
     pub fn with_optimizer_state(mut self, state: OptimizerState) -> Self {
         self.optimizer_state = Some(state);
         self
     }
 }
 
-/// Сохраняет чекпоинт в директорию.
+/// Saves a checkpoint to a directory.
 ///
-/// Структура директории:
+/// Directory layout:
 /// ```text
 /// checkpoint_dir/
-/// ├── config.json          # Конфигурация и метаданные
-/// ├── model.safetensors    # Веса модели
-/// └── optimizer.json       # Состояние оптимизатора (опционально)
+/// ├── config.json          # Configuration and metadata
+/// ├── model.safetensors    # Model weights
+/// └── optimizer.json       # Optimizer state (optional)
 /// ```
 pub fn save_checkpoint<P: AsRef<Path>>(path: P, checkpoint: &Checkpoint) -> Result<()> {
     let dir = path.as_ref();
 
-    // Создаем директорию если не существует
+    // Create the directory if it does not exist.
     fs::create_dir_all(dir)?;
 
-    // Сохраняем конфигурацию
+    // Save the configuration.
     let config_path = dir.join("config.json");
     let config_json = serde_json::to_string_pretty(&checkpoint.config)?;
     let mut config_file = File::create(&config_path)?;
     config_file.write_all(config_json.as_bytes())?;
 
-    // Сохраняем веса модели
+    // Save the model weights.
     let weights_path = dir.join("model.safetensors");
     save_safetensors(&weights_path, &checkpoint.model_weights)?;
 
-    // Сохраняем состояние оптимизатора если есть
+    // Save the optimizer state if present.
     if let Some(ref opt_state) = checkpoint.optimizer_state {
         let opt_path = dir.join("optimizer.json");
         let opt_json = serde_json::to_string_pretty(opt_state)?;
@@ -211,7 +211,7 @@ pub fn save_checkpoint<P: AsRef<Path>>(path: P, checkpoint: &Checkpoint) -> Resu
     Ok(())
 }
 
-/// Загружает чекпоинт из директории.
+/// Loads a checkpoint from a directory.
 pub fn load_checkpoint<P: AsRef<Path>>(path: P) -> Result<Checkpoint> {
     let dir = path.as_ref();
 
@@ -219,7 +219,7 @@ pub fn load_checkpoint<P: AsRef<Path>>(path: P) -> Result<Checkpoint> {
         return Err(CheckpointError::DirectoryNotFound(dir.to_path_buf()));
     }
 
-    // Загружаем конфигурацию
+    // Load the configuration.
     let config_path = dir.join("config.json");
     if !config_path.exists() {
         return Err(CheckpointError::FileNotFound(config_path));
@@ -229,14 +229,14 @@ pub fn load_checkpoint<P: AsRef<Path>>(path: P) -> Result<Checkpoint> {
     config_file.read_to_string(&mut config_str)?;
     let config: CheckpointConfig = serde_json::from_str(&config_str)?;
 
-    // Загружаем веса
+    // Load the weights.
     let weights_path = dir.join("model.safetensors");
     if !weights_path.exists() {
         return Err(CheckpointError::FileNotFound(weights_path));
     }
     let model_weights = load_safetensors(&weights_path)?;
 
-    // Загружаем состояние оптимизатора если есть
+    // Load the optimizer state if present.
     let opt_path = dir.join("optimizer.json");
     let optimizer_state = if opt_path.exists() {
         let mut opt_file = File::open(&opt_path)?;
@@ -254,18 +254,18 @@ pub fn load_checkpoint<P: AsRef<Path>>(path: P) -> Result<Checkpoint> {
     })
 }
 
-/// Менеджер чекпоинтов для автоматического сохранения.
+/// Checkpoint manager for automatic saving.
 pub struct CheckpointManager {
-    /// Базовая директория для чекпоинтов
+    /// Base directory for checkpoints.
     pub base_dir: PathBuf,
-    /// Максимальное количество сохраняемых чекпоинтов
+    /// Maximum number of checkpoints to keep.
     pub max_to_keep: usize,
-    /// Список существующих чекпоинтов
+    /// List of existing checkpoints.
     checkpoints: Vec<PathBuf>,
 }
 
 impl CheckpointManager {
-    /// Создает новый менеджер чекпоинтов.
+    /// Creates a new checkpoint manager.
     pub fn new<P: AsRef<Path>>(base_dir: P, max_to_keep: usize) -> Self {
         Self {
             base_dir: base_dir.as_ref().to_path_buf(),
@@ -274,7 +274,7 @@ impl CheckpointManager {
         }
     }
 
-    /// Сохраняет чекпоинт с автоматическим именем.
+    /// Saves a checkpoint with an auto-generated name.
     pub fn save(&mut self, checkpoint: &Checkpoint) -> Result<PathBuf> {
         let checkpoint_name = format!(
             "checkpoint_epoch{}_step{}",
@@ -285,7 +285,7 @@ impl CheckpointManager {
         save_checkpoint(&checkpoint_path, checkpoint)?;
         self.checkpoints.push(checkpoint_path.clone());
 
-        // Удаляем старые чекпоинты если превышен лимит
+        // Remove old checkpoints when the retention limit is exceeded.
         while self.checkpoints.len() > self.max_to_keep {
             if let Some(old_path) = self.checkpoints.first() {
                 if old_path.exists() {
@@ -298,10 +298,10 @@ impl CheckpointManager {
         Ok(checkpoint_path)
     }
 
-    /// Загружает последний чекпоинт.
+    /// Loads the latest checkpoint.
     pub fn load_latest(&self) -> Result<Option<Checkpoint>> {
         if self.checkpoints.is_empty() {
-            // Попробуем найти чекпоинты в директории
+            // Try to locate checkpoints in the base directory.
             let checkpoints = self.find_checkpoints()?;
             if checkpoints.is_empty() {
                 return Ok(None);
@@ -314,7 +314,7 @@ impl CheckpointManager {
         Ok(Some(load_checkpoint(latest)?))
     }
 
-    /// Ищет существующие чекпоинты в базовой директории.
+    /// Scans the base directory for existing checkpoints.
     fn find_checkpoints(&self) -> Result<Vec<PathBuf>> {
         if !self.base_dir.exists() {
             return Ok(Vec::new());
@@ -336,7 +336,7 @@ impl CheckpointManager {
         Ok(checkpoints)
     }
 
-    /// Возвращает путь к лучшему чекпоинту (с минимальным loss).
+    /// Returns the path to the best checkpoint (the one with the minimum loss).
     pub fn get_best_checkpoint(&self) -> Result<Option<PathBuf>> {
         let checkpoints = self.find_checkpoints()?;
         let mut best_loss = f32::MAX;
@@ -356,13 +356,13 @@ impl CheckpointManager {
     }
 }
 
-/// Быстрое сохранение только весов модели.
+/// Fast save of model weights only.
 pub fn save_weights<P: AsRef<Path>>(path: P, weights: &HashMap<String, Value>) -> Result<()> {
     save_safetensors(path, weights)?;
     Ok(())
 }
 
-/// Быстрая загрузка только весов модели.
+/// Fast load of model weights only.
 pub fn load_weights<P: AsRef<Path>>(path: P) -> Result<HashMap<String, Value>> {
     let weights = load_safetensors(path)?;
     Ok(weights)
@@ -388,7 +388,10 @@ mod tests {
         assert_eq!(config.global_step, 1000);
         assert!((config.learning_rate - 0.001).abs() < 1e-6);
         assert_eq!(config.last_loss, Some(0.5));
-        assert_eq!(config.metadata.get("test_key"), Some(&"test_value".to_string()));
+        assert_eq!(
+            config.metadata.get("test_key"),
+            Some(&"test_value".to_string())
+        );
     }
 
     #[test]
@@ -396,10 +399,9 @@ mod tests {
         let mut weights = HashMap::new();
         weights.insert(
             "layer.weight".to_string(),
-            Value::Tensor(ArrayD::from_shape_vec(
-                ndarray::IxDyn(&[2, 2]),
-                vec![1.0, 2.0, 3.0, 4.0],
-            ).unwrap()),
+            Value::Tensor(
+                ArrayD::from_shape_vec(ndarray::IxDyn(&[2, 2]), vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+            ),
         );
 
         let config = CheckpointConfig::new()
@@ -410,17 +412,17 @@ mod tests {
 
         let path = "test_checkpoint_dir";
 
-        // Сохраняем
+        // Save.
         save_checkpoint(path, &checkpoint).expect("Failed to save checkpoint");
 
-        // Загружаем
+        // Load.
         let loaded = load_checkpoint(path).expect("Failed to load checkpoint");
 
         assert_eq!(loaded.config.model_name, Some("test".to_string()));
         assert_eq!(loaded.config.epoch, 5);
         assert!(loaded.model_weights.contains_key("layer.weight"));
 
-        // Очистка
+        // Cleanup.
         fs::remove_dir_all(path).ok();
     }
 
@@ -429,7 +431,9 @@ mod tests {
         let mut state = OptimizerState::new("Adam");
         state.params.insert("lr".to_string(), 0.001);
         state.params.insert("beta1".to_string(), 0.9);
-        state.state.insert("layer.weight_m".to_string(), vec![0.0; 4]);
+        state
+            .state
+            .insert("layer.weight_m".to_string(), vec![0.0; 4]);
 
         assert_eq!(state.optimizer_type, "Adam");
         assert_eq!(state.params.get("lr"), Some(&0.001));

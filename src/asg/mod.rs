@@ -38,19 +38,25 @@ pub type AsgResult<T> = std::result::Result<T, AsgError>;
 /// Errors that can occur when working with ASG.
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum AsgError {
-    #[error("Node with ID {0} not found in graph. \
-             Verify that the node was added to the graph using add_node() before use.")]
+    #[error(
+        "Node with ID {0} not found in graph. \
+             Verify that the node was added to the graph using add_node() before use."
+    )]
     NodeNotFound(NodeId),
 
-    #[error("Input with name '{0}' not found in graph. \
-             Ensure that an Input node was created with this name.")]
+    #[error(
+        "Input with name '{0}' not found in graph. \
+             Ensure that an Input node was created with this name."
+    )]
     InputNotFound(String),
 
     #[error("Invalid graph structure: {0}")]
     InvalidGraph(String),
 
-    #[error("Cyclic dependency detected in graph. \
-             ASG must be a directed acyclic graph (DAG).")]
+    #[error(
+        "Cyclic dependency detected in graph. \
+             ASG must be a directed acyclic graph (DAG)."
+    )]
     CyclicDependency,
 }
 
@@ -106,9 +112,13 @@ pub struct Node {
 pub enum NodeType {
     // --- Data and Input Nodes ---
     /// Input node of the graph. Defines the public API of the graph.
-    Input { name: String },
+    Input {
+        name: String,
+    },
     /// Trainable model parameter (e.g., weights or biases).
-    Parameter { name: String },
+    Parameter {
+        name: String,
+    },
     /// Constant value (literal) embedded directly in the graph.
     Literal(Value),
     /// Reference to a node in another "external" graph.
@@ -142,9 +152,9 @@ pub enum NodeType {
     Tanh(NodeId),
     LeakyReLU(NodeId, f32), // (input, negative_slope)
     GELU(NodeId),
-    SiLU(NodeId), // also known as Swish
-    ELU(NodeId, f32), // (input, alpha)
-    Softplus(NodeId, f32), // (input, beta)
+    SiLU(NodeId),            // also known as Swish
+    ELU(NodeId, f32),        // (input, alpha)
+    Softplus(NodeId, f32),   // (input, beta)
     Clamp(NodeId, f32, f32), // (input, min, max)
 
     // --- Reduction Operations ---
@@ -154,20 +164,20 @@ pub enum NodeType {
 
     // --- Embedding Operations ---
     /// Embedding lookup: transforms indices into dense vectors.
-    /// indices: [*] (any shape), weight: [num_embeddings, embedding_dim]
-    /// Output: [*, embedding_dim]
+    /// `indices: [*]` (any shape), `weight: [num_embeddings, embedding_dim]`,
+    /// output: `[*, embedding_dim]`.
     Embedding {
         /// Index tensor (integers represented as f32).
         indices: NodeId,
-        /// Embedding matrix of shape [num_embeddings, embedding_dim].
+        /// Embedding matrix of shape `[num_embeddings, embedding_dim]`.
         weight: NodeId,
     },
     /// Gradient for Embedding: scatter-add operation.
     /// Accumulates gradients into the weight matrix by indices.
-    /// grad_output: [*, embedding_dim], indices: [*]
-    /// Output: [num_embeddings, embedding_dim]
+    /// `grad_output: [*, embedding_dim]`, `indices: [*]`.
+    /// Output shape: `[num_embeddings, embedding_dim]`.
     EmbeddingGrad {
-        /// Gradient from subsequent operations [*, embedding_dim].
+        /// Gradient from subsequent operations `[*, embedding_dim]`.
         grad_output: NodeId,
         /// Indices used for the lookup.
         indices: NodeId,
@@ -178,6 +188,32 @@ pub enum NodeType {
     // --- Transformation Operations ---
     Reshape(NodeId, NodeId), // Second argument is tensor with new shape
     Transpose(NodeId, usize, usize), // Axes to transpose
+    /// Slices a tensor along a single axis: `output = input[..., start..end, ...]`.
+    /// Output shape is identical to input except the sliced axis becomes `end - start`.
+    Slice {
+        input: NodeId,
+        /// Axis to slice.
+        axis: usize,
+        /// Start index (inclusive).
+        start: usize,
+        /// End index (exclusive).
+        end: usize,
+    },
+    /// Concatenates multiple tensors along a given axis. All inputs must have
+    /// identical shapes except along `axis`.
+    Concat {
+        inputs: Vec<NodeId>,
+        axis: usize,
+    },
+    /// Backward of `Slice`: zero-pads `grad_output` so that it lives at
+    /// indices `start..start + grad_output.shape[axis]` inside an output
+    /// whose `axis` dimension is `full_size` (other axes unchanged).
+    SliceBackward {
+        grad_output: NodeId,
+        axis: usize,
+        start: usize,
+        full_size: usize,
+    },
     /// Broadcasts the first tensor (scalar) to the shape of the second tensor.
     /// Used mainly in gradient graph, e.g., for grad(Sum).
     Broadcast(NodeId, NodeId),
@@ -189,11 +225,11 @@ pub enum NodeType {
     /// 2D Convolution.
     /// Input tensor of shape [N, C_in, H, W], kernel of shape [C_out, C_in, kH, kW].
     Conv2d {
-        /// Input tensor of shape [N, C_in, H, W].
+        /// Input tensor of shape `[N, C_in, H, W]`.
         input: NodeId,
-        /// Convolution kernel (weights) of shape [C_out, C_in/groups, kH, kW].
+        /// Convolution kernel (weights) of shape `[C_out, C_in/groups, kH, kW]`.
         weight: NodeId,
-        /// Optional bias of shape [C_out].
+        /// Optional bias of shape `[C_out]`.
         bias: Option<NodeId>,
         /// Stride (stride_h, stride_w).
         stride: (usize, usize),
@@ -348,8 +384,8 @@ pub enum NodeType {
     },
     /// Loop execution of a sub-graph.
     ForLoop {
-        iterable: NodeId,      // Node to iterate over (e.g., tensor)
-        loop_body_asg: AsgId,  // ID of sub-graph that will be the loop body
+        iterable: NodeId,     // Node to iterate over (e.g., tensor)
+        loop_body_asg: AsgId, // ID of sub-graph that will be the loop body
     },
 
     // --- Functions ---
@@ -431,15 +467,11 @@ impl Asg {
 
     /// Finds a node by its ID.
     pub fn get_node(&self, id: NodeId) -> AsgResult<&Node> {
-        self.nodes
-            .get(&id)
-            .ok_or(AsgError::NodeNotFound(id))
+        self.nodes.get(&id).ok_or(AsgError::NodeNotFound(id))
     }
 
     /// Finds a mutable node by its ID.
     pub fn get_node_mut(&mut self, id: NodeId) -> AsgResult<&mut Node> {
-        self.nodes
-            .get_mut(&id)
-            .ok_or(AsgError::NodeNotFound(id))
+        self.nodes.get_mut(&id).ok_or(AsgError::NodeNotFound(id))
     }
 }

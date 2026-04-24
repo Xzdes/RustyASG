@@ -17,6 +17,9 @@
 //!
 //! Run with: `cargo run --example transformer_classifier --release`
 
+// Demo code: readability-first style.
+#![allow(clippy::needless_range_loop)]
+
 use ndarray::{ArrayD, IxDyn};
 use rustyasg::analysis::shape_inference::ShapeInference;
 use rustyasg::asg::{DType, NodeType, Value};
@@ -34,11 +37,11 @@ use std::rc::Rc;
 // Configuration
 // ============================================================
 
-const SEQ_LEN: usize = 8;        // Sequence length
-const EMBED_DIM: usize = 16;     // Embedding dimension
-const HIDDEN_DIM: usize = 32;    // Hidden layer dimension
-const NUM_CLASSES: usize = 4;    // Number of sequence patterns
-const VOCAB_SIZE: usize = 10;    // Vocabulary size (digits 0-9)
+const SEQ_LEN: usize = 8; // Sequence length
+const EMBED_DIM: usize = 16; // Embedding dimension
+const HIDDEN_DIM: usize = 32; // Hidden layer dimension
+const NUM_CLASSES: usize = 4; // Number of sequence patterns
+const VOCAB_SIZE: usize = 10; // Vocabulary size (digits 0-9)
 
 // ============================================================
 // Data Generation
@@ -51,14 +54,20 @@ fn generate_sequence_data(num_samples: usize) -> (ArrayD<f32>, ArrayD<f32>) {
 
     for i in 0..num_samples {
         let class_id = i % NUM_CLASSES;
-        let offset = (i / NUM_CLASSES) % 3;  // Add variation
+        let offset = (i / NUM_CLASSES) % 3; // Add variation
 
         for j in 0..SEQ_LEN {
             let value = match class_id {
-                0 => ((j + offset) % VOCAB_SIZE) as f32,                    // Ascending
-                1 => ((VOCAB_SIZE - 1 - j + offset) % VOCAB_SIZE) as f32,   // Descending
-                2 => if j % 2 == 0 { offset as f32 } else { (9 - offset) as f32 },  // Alternating
-                3 => ((5 + offset) % VOCAB_SIZE) as f32,                    // Constant
+                0 => ((j + offset) % VOCAB_SIZE) as f32, // Ascending
+                1 => ((VOCAB_SIZE - 1 - j + offset) % VOCAB_SIZE) as f32, // Descending
+                2 => {
+                    if j % 2 == 0 {
+                        offset as f32
+                    } else {
+                        (9 - offset) as f32
+                    }
+                } // Alternating
+                3 => ((5 + offset) % VOCAB_SIZE) as f32, // Constant
                 _ => 0.0,
             };
             sequences[i * SEQ_LEN + j] = value;
@@ -76,7 +85,9 @@ fn generate_sequence_data(num_samples: usize) -> (ArrayD<f32>, ArrayD<f32>) {
 fn print_sequence(data: &ArrayD<f32>, idx: usize, class_name: &str) {
     print!("  [");
     for j in 0..SEQ_LEN {
-        if j > 0 { print!(", "); }
+        if j > 0 {
+            print!(", ");
+        }
         print!("{}", data[[idx, j]] as i32);
     }
     println!("] -> {}", class_name);
@@ -98,15 +109,24 @@ fn create_embeddings(sequences: &ArrayD<f32>, num_samples: usize) -> ArrayD<f32>
             for k in 0..EMBED_DIM {
                 // Token embedding: sinusoidal based on token value
                 let token_angle = token as f32 * (k as f32 + 1.0) * 0.2;
-                let token_embed = if k % 2 == 0 { token_angle.sin() } else { token_angle.cos() };
+                let token_embed = if k % 2 == 0 {
+                    token_angle.sin()
+                } else {
+                    token_angle.cos()
+                };
 
                 // Positional encoding: sinusoidal based on position
                 let pos_div = (10000.0_f32).powf((k / 2 * 2) as f32 / EMBED_DIM as f32);
                 let pos_angle = j as f32 / pos_div;
-                let pos_embed = if k % 2 == 0 { pos_angle.sin() } else { pos_angle.cos() };
+                let pos_embed = if k % 2 == 0 {
+                    pos_angle.sin()
+                } else {
+                    pos_angle.cos()
+                };
 
                 // Combine token + position
-                embeddings[i * SEQ_LEN * EMBED_DIM + j * EMBED_DIM + k] = token_embed + pos_embed * 0.5;
+                embeddings[i * SEQ_LEN * EMBED_DIM + j * EMBED_DIM + k] =
+                    token_embed + pos_embed * 0.5;
             }
         }
     }
@@ -136,7 +156,7 @@ fn main() {
 
     println!("Generating sequence data...");
     let (train_seqs, train_labels) = generate_sequence_data(num_train);
-    let (test_seqs, test_labels) = generate_sequence_data(num_test);
+    let (test_seqs, _test_labels) = generate_sequence_data(num_test);
 
     // Show examples
     println!("\nSequence patterns:");
@@ -153,41 +173,35 @@ fn main() {
     let x = Tensor::new_input(&context, "x");
     let y_true = Tensor::new_input(&context, "y_true");
 
-    let input_dim = SEQ_LEN * EMBED_DIM;  // 128
+    let input_dim = SEQ_LEN * EMBED_DIM; // 128
 
-    // Deep network with attention-like structure:
-    // Layer 1: Input projection (like Q, K, V combined)
-    let layer1 = Linear::new(&context, "layer1");  // 128 -> 64
-
-    // Layer 2: Attention-like mixing layer
-    let layer2 = Linear::new(&context, "layer2");  // 64 -> 64
-
-    // Layer 3: Feed-forward
-    let layer3 = Linear::new(&context, "layer3");  // 64 -> 32
-
-    // Layer 4: Another FF layer
-    let layer4 = Linear::new(&context, "layer4");  // 32 -> 32
-
-    // Classifier
-    let classifier = Linear::new(&context, "classifier");  // 32 -> 4
+    // Deep network with attention-like structure (shapes/init auto-registered).
+    let layer1 = Linear::new(&context, "layer1", input_dim, 64);
+    let layer2 = Linear::new(&context, "layer2", 64, 64);
+    let layer3 = Linear::new(&context, "layer3", 64, 32);
+    let layer4 = Linear::new(&context, "layer4", 32, 32);
+    let classifier = Linear::new(&context, "classifier", 32, NUM_CLASSES);
 
     // Forward pass with residual-like connections
-    let h1 = layer1.forward(&x).relu();         // [batch, 64]
+    let h1 = layer1.forward(&x).relu(); // [batch, 64]
     let h2_pre = layer2.forward(&h1);
-    let h2 = (&h2_pre + &h1).relu();            // Residual connection!
+    let h2 = (&h2_pre + &h1).relu(); // Residual connection!
 
-    let h3 = layer3.forward(&h2).relu();        // [batch, 32]
+    let h3 = layer3.forward(&h2).relu(); // [batch, 32]
     let h4_pre = layer4.forward(&h3);
-    let h4 = (&h4_pre + &h3).relu();            // Another residual!
+    let h4 = (&h4_pre + &h3).relu(); // Another residual!
 
-    let logits = classifier.forward(&h4);       // [batch, 4]
+    let logits = classifier.forward(&h4); // [batch, 4]
     let y_pred = logits.sigmoid();
 
     // Loss
     let loss = mse_loss_mean(&y_pred, &y_true);
 
     // Set output
-    context.borrow_mut().main_graph_mut().set_output(loss.node_id);
+    context
+        .borrow_mut()
+        .main_graph_mut()
+        .set_output(loss.node_id);
 
     // Collect parameters
     let params: Vec<Tensor> = [
@@ -196,16 +210,23 @@ fn main() {
         layer3.parameters(),
         layer4.parameters(),
         classifier.parameters(),
-    ].concat();
+    ]
+    .concat();
     let param_ids: Vec<_> = params.iter().map(|p| p.node_id).collect();
 
     // ============ SHAPE INFERENCE ============
     let mut initial_shapes = HashMap::new();
     initial_shapes.insert("x".to_string(), (vec![batch_size, input_dim], DType::F32));
-    initial_shapes.insert("y_true".to_string(), (vec![batch_size, NUM_CLASSES], DType::F32));
+    initial_shapes.insert(
+        "y_true".to_string(),
+        (vec![batch_size, NUM_CLASSES], DType::F32),
+    );
 
     // Layer dimensions
-    initial_shapes.insert("layer1.weights".to_string(), (vec![input_dim, 64], DType::F32));
+    initial_shapes.insert(
+        "layer1.weights".to_string(),
+        (vec![input_dim, 64], DType::F32),
+    );
     initial_shapes.insert("layer1.bias".to_string(), (vec![1, 64], DType::F32));
     initial_shapes.insert("layer2.weights".to_string(), (vec![64, 64], DType::F32));
     initial_shapes.insert("layer2.bias".to_string(), (vec![1, 64], DType::F32));
@@ -213,8 +234,14 @@ fn main() {
     initial_shapes.insert("layer3.bias".to_string(), (vec![1, 32], DType::F32));
     initial_shapes.insert("layer4.weights".to_string(), (vec![32, 32], DType::F32));
     initial_shapes.insert("layer4.bias".to_string(), (vec![1, 32], DType::F32));
-    initial_shapes.insert("classifier.weights".to_string(), (vec![32, NUM_CLASSES], DType::F32));
-    initial_shapes.insert("classifier.bias".to_string(), (vec![1, NUM_CLASSES], DType::F32));
+    initial_shapes.insert(
+        "classifier.weights".to_string(),
+        (vec![32, NUM_CLASSES], DType::F32),
+    );
+    initial_shapes.insert(
+        "classifier.bias".to_string(),
+        (vec![1, NUM_CLASSES], DType::F32),
+    );
 
     let mut forward_graph = context.borrow().main_graph().clone();
     ShapeInference::run(&mut forward_graph, &initial_shapes).expect("Shape inference failed");
@@ -228,7 +255,8 @@ fn main() {
     println!("  Forward graph: {} nodes", forward_graph.nodes.len());
     println!("  Gradient graph: {} nodes", grad_graph.nodes.len());
 
-    let total_params: usize = initial_shapes.iter()
+    let total_params: usize = initial_shapes
+        .iter()
         .filter(|(name, _)| name.contains("weight") || name.contains("bias"))
         .map(|(_, (shape, _))| shape.iter().product::<usize>())
         .sum();
@@ -241,7 +269,7 @@ fn main() {
         let scale = (6.0 / (fan_in + fan_out) as f32).sqrt();
         (0..fan_in * fan_out)
             .map(|i| {
-                let x = ((i as f32 * 0.618033988749895) + 0.1).fract();
+                let x = ((i as f32 * 0.618_034) + 0.1).fract();
                 (x * 2.0 - 1.0) * scale
             })
             .collect()
@@ -259,10 +287,10 @@ fn main() {
     for (name, fan_in, fan_out) in layer_configs {
         param_values.insert(
             format!("{}.weights", name),
-            Value::Tensor(ArrayD::from_shape_vec(
-                IxDyn(&[fan_in, fan_out]),
-                xavier_init(fan_in, fan_out)
-            ).unwrap()),
+            Value::Tensor(
+                ArrayD::from_shape_vec(IxDyn(&[fan_in, fan_out]), xavier_init(fan_in, fan_out))
+                    .unwrap(),
+            ),
         );
         param_values.insert(
             format!("{}.bias", name),
@@ -287,8 +315,14 @@ fn main() {
             let end = start + batch_size;
 
             // Get batch
-            let batch_seqs = train_seqs.slice(ndarray::s![start..end, ..]).to_owned().into_dyn();
-            let batch_labels = train_labels.slice(ndarray::s![start..end, ..]).to_owned().into_dyn();
+            let batch_seqs = train_seqs
+                .slice(ndarray::s![start..end, ..])
+                .to_owned()
+                .into_dyn();
+            let batch_labels = train_labels
+                .slice(ndarray::s![start..end, ..])
+                .to_owned()
+                .into_dyn();
 
             // Create embeddings
             let batch_embeds = create_embeddings(&batch_seqs, batch_size);
@@ -333,11 +367,16 @@ fn main() {
 
             // Extract gradients
             let param_names = [
-                "layer1.weights", "layer1.bias",
-                "layer2.weights", "layer2.bias",
-                "layer3.weights", "layer3.bias",
-                "layer4.weights", "layer4.bias",
-                "classifier.weights", "classifier.bias",
+                "layer1.weights",
+                "layer1.bias",
+                "layer2.weights",
+                "layer2.bias",
+                "layer3.weights",
+                "layer3.bias",
+                "layer4.weights",
+                "layer4.bias",
+                "classifier.weights",
+                "classifier.bias",
             ];
 
             let mut gradients: HashMap<String, Value> = HashMap::new();
@@ -356,7 +395,10 @@ fn main() {
             let train_accuracy = evaluate(&backend, &param_values, &train_seqs, num_train);
             let test_accuracy = evaluate(&backend, &param_values, &test_seqs, num_test);
             let avg_loss = epoch_loss / num_batches as f32;
-            println!("{:5} | {:.6} | {:6.1}%   | {:6.1}%", epoch, avg_loss, train_accuracy, test_accuracy);
+            println!(
+                "{:5} | {:.6} | {:6.1}%   | {:6.1}%",
+                epoch, avg_loss, train_accuracy, test_accuracy
+            );
         }
     }
 
@@ -387,17 +429,23 @@ fn main() {
         let true_class = i % NUM_CLASSES;
         let pred_class = predictions[i];
         let is_correct = pred_class == true_class;
-        if is_correct { correct += 1; }
+        if is_correct {
+            correct += 1;
+        }
 
         let mut seq_str = String::new();
         for j in 0..SEQ_LEN {
-            if j > 0 { seq_str.push(','); }
+            if j > 0 {
+                seq_str.push(',');
+            }
             seq_str.push_str(&format!("{}", test_seqs[[i, j]] as i32));
         }
 
         let mark = if is_correct { "Yes" } else { "No " };
-        println!("  {:2}   | {:20} |  {}   |  {}   | {}",
-                 i, seq_str, true_class, pred_class, mark);
+        println!(
+            "  {:2}   | {:20} |  {}   |  {}   | {}",
+            i, seq_str, true_class, pred_class, mark
+        );
     }
 
     println!("\nCorrect: {}/20 shown", correct);
@@ -442,11 +490,11 @@ fn get_predictions(
 
     let x = Tensor::new_input(&context, "x");
 
-    let layer1 = Linear::new(&context, "layer1");
-    let layer2 = Linear::new(&context, "layer2");
-    let layer3 = Linear::new(&context, "layer3");
-    let layer4 = Linear::new(&context, "layer4");
-    let classifier = Linear::new(&context, "classifier");
+    let layer1 = Linear::new(&context, "layer1", SEQ_LEN * EMBED_DIM, 64);
+    let layer2 = Linear::new(&context, "layer2", 64, 64);
+    let layer3 = Linear::new(&context, "layer3", 64, 32);
+    let layer4 = Linear::new(&context, "layer4", 32, 32);
+    let classifier = Linear::new(&context, "classifier", 32, NUM_CLASSES);
 
     let h1 = layer1.forward(&x).relu();
     let h2_pre = layer2.forward(&h1);
@@ -459,7 +507,10 @@ fn get_predictions(
     let logits = classifier.forward(&h4);
     let y_pred = logits.sigmoid();
 
-    context.borrow_mut().main_graph_mut().set_output(y_pred.node_id);
+    context
+        .borrow_mut()
+        .main_graph_mut()
+        .set_output(y_pred.node_id);
 
     // Create embeddings
     let embeddings = create_embeddings(sequences, num_samples);

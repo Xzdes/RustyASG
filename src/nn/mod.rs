@@ -31,7 +31,7 @@
 //! ### Positional Encodings
 //! - [`SinusoidalPositionalEncoding`]: Fixed sinusoidal encoding
 //! - [`LearnedPositionalEmbedding`]: Learnable position embeddings
-//! - [`RotaryPositionEmbedding`]: RoPE (used in LLaMA, etc.)
+//! - [`RotaryPositionEmbedding`]: RoPE, used in LLaMA and similar
 //! - [`ALiBi`]: Attention with Linear Biases
 //!
 //! ### Pooling
@@ -64,6 +64,7 @@ pub mod conv;
 pub mod dropout;
 pub mod embedding;
 pub mod feedforward;
+pub mod init;
 pub mod linear;
 pub mod module;
 pub mod norm;
@@ -74,7 +75,7 @@ pub mod transformer;
 // Re-export structures for convenience
 
 // Activations
-pub use activations::{ELU, GELU, LeakyReLU, ReLU, SiLU, Sigmoid, Softmax, Softplus, Swish, Tanh};
+pub use activations::{LeakyReLU, ReLU, SiLU, Sigmoid, Softmax, Softplus, Swish, Tanh, ELU, GELU};
 
 // Convolutional layers
 pub use conv::{Conv2d, Conv2dConfig, ConvTranspose2d};
@@ -84,8 +85,8 @@ pub use pooling::{AdaptiveAvgPool2d, AvgPool2d, GlobalAvgPool2d, MaxPool2d};
 
 // Other layers
 pub use attention::{
-    MultiHeadAttention, MultiHeadAttentionConfig, AttentionMask,
-    create_causal_mask, create_padding_mask_from_ids,
+    create_causal_mask, create_padding_mask_from_ids, AttentionMask, MultiHeadAttention,
+    MultiHeadAttentionConfig,
 };
 pub use batchnorm::BatchNorm;
 pub use dropout::{Dropout, SpatialDropout};
@@ -94,10 +95,13 @@ pub use feedforward::FeedForward;
 pub use linear::Linear;
 pub use norm::LayerNorm;
 pub use positional::{
-    LearnedPositionalEmbedding, SinusoidalPositionalEncoding, create_position_ids,
-    RotaryPositionEmbedding, ALiBi,
+    create_position_ids, ALiBi, LearnedPositionalEmbedding, RotaryPositionEmbedding,
+    SinusoidalPositionalEncoding,
 };
 pub use transformer::TransformerBlock;
 
 // Base trait
 pub use module::Module;
+
+// Initializers
+pub use init::Initializer;

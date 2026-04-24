@@ -1,15 +1,15 @@
-// --- Файл: src/metrics/running.rs ---
-
-//! Утилиты для отслеживания статистик в реальном времени.
+//! Utilities for tracking statistics online.
 //!
-//! Использует онлайн-алгоритмы (Welford) для численно стабильного
-//! вычисления mean и std без хранения всех значений.
+//! Uses numerically stable incremental algorithms (Welford's method) so
+//! `mean` and `std` can be computed without keeping the whole history in
+//! memory.
 
 use std::collections::HashMap;
 
-/// Онлайн вычисление среднего значения.
+/// Online running mean.
 ///
-/// Использует инкрементальный алгоритм для численной стабильности.
+/// Uses an incremental update that avoids the precision loss of repeatedly
+/// summing floats.
 #[derive(Debug, Clone, Default)]
 pub struct RunningMean {
     mean: f64,
@@ -17,59 +17,59 @@ pub struct RunningMean {
 }
 
 impl RunningMean {
-    /// Создает новый RunningMean.
+    /// Creates a new `RunningMean`.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Добавляет значение.
+    /// Adds a single value.
     pub fn update(&mut self, value: f64) {
         self.count += 1;
         let delta = value - self.mean;
         self.mean += delta / self.count as f64;
     }
 
-    /// Добавляет несколько значений.
+    /// Adds a batch of values.
     pub fn update_batch(&mut self, values: &[f64]) {
         for &v in values {
             self.update(v);
         }
     }
 
-    /// Возвращает текущее среднее.
+    /// Returns the current mean.
     pub fn compute(&self) -> f64 {
         self.mean
     }
 
-    /// Возвращает количество добавленных значений.
+    /// Returns the number of values seen so far.
     pub fn count(&self) -> usize {
         self.count
     }
 
-    /// Сбрасывает состояние.
+    /// Resets the accumulator.
     pub fn reset(&mut self) {
         self.mean = 0.0;
         self.count = 0;
     }
 }
 
-/// Онлайн вычисление стандартного отклонения (Welford's algorithm).
+/// Online running mean + standard deviation (Welford's algorithm).
 ///
-/// Вычисляет mean, variance и std без хранения всех значений.
+/// Computes mean, variance and std without storing individual values.
 #[derive(Debug, Clone, Default)]
 pub struct RunningStd {
     count: usize,
     mean: f64,
-    m2: f64, // Sum of squares of differences from mean
+    m2: f64, // Sum of squares of differences from the mean.
 }
 
 impl RunningStd {
-    /// Создает новый RunningStd.
+    /// Creates a new `RunningStd`.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Добавляет значение (Welford's online algorithm).
+    /// Adds a single value using Welford's online update.
     pub fn update(&mut self, value: f64) {
         self.count += 1;
         let delta = value - self.mean;
@@ -78,19 +78,19 @@ impl RunningStd {
         self.m2 += delta * delta2;
     }
 
-    /// Добавляет несколько значений.
+    /// Adds a batch of values.
     pub fn update_batch(&mut self, values: &[f64]) {
         for &v in values {
             self.update(v);
         }
     }
 
-    /// Возвращает среднее значение.
+    /// Returns the current mean.
     pub fn mean(&self) -> f64 {
         self.mean
     }
 
-    /// Возвращает дисперсию (sample variance).
+    /// Returns the sample variance (`n - 1` in the denominator).
     pub fn variance(&self) -> f64 {
         if self.count < 2 {
             0.0
@@ -99,7 +99,7 @@ impl RunningStd {
         }
     }
 
-    /// Возвращает population variance.
+    /// Returns the population variance (`n` in the denominator).
     pub fn population_variance(&self) -> f64 {
         if self.count == 0 {
             0.0
@@ -108,22 +108,22 @@ impl RunningStd {
         }
     }
 
-    /// Возвращает стандартное отклонение (sample std).
+    /// Returns the sample standard deviation.
     pub fn std(&self) -> f64 {
         self.variance().sqrt()
     }
 
-    /// Возвращает population std.
+    /// Returns the population standard deviation.
     pub fn population_std(&self) -> f64 {
         self.population_variance().sqrt()
     }
 
-    /// Возвращает количество значений.
+    /// Returns the number of values seen so far.
     pub fn count(&self) -> usize {
         self.count
     }
 
-    /// Сбрасывает состояние.
+    /// Resets the accumulator.
     pub fn reset(&mut self) {
         self.count = 0;
         self.mean = 0.0;
@@ -131,7 +131,7 @@ impl RunningStd {
     }
 }
 
-/// Онлайн вычисление минимума и максимума.
+/// Online running min / max tracker.
 #[derive(Debug, Clone)]
 pub struct RunningMinMax {
     min: f64,
@@ -140,7 +140,7 @@ pub struct RunningMinMax {
 }
 
 impl RunningMinMax {
-    /// Создает новый RunningMinMax.
+    /// Creates a new `RunningMinMax`.
     pub fn new() -> Self {
         Self {
             min: f64::INFINITY,
@@ -149,7 +149,7 @@ impl RunningMinMax {
         }
     }
 
-    /// Добавляет значение.
+    /// Adds a value.
     pub fn update(&mut self, value: f64) {
         self.count += 1;
         if value < self.min {
@@ -160,7 +160,7 @@ impl RunningMinMax {
         }
     }
 
-    /// Возвращает минимум.
+    /// Returns the minimum, or `None` if no values have been added.
     pub fn min(&self) -> Option<f64> {
         if self.count > 0 {
             Some(self.min)
@@ -169,7 +169,7 @@ impl RunningMinMax {
         }
     }
 
-    /// Возвращает максимум.
+    /// Returns the maximum, or `None` if no values have been added.
     pub fn max(&self) -> Option<f64> {
         if self.count > 0 {
             Some(self.max)
@@ -178,7 +178,7 @@ impl RunningMinMax {
         }
     }
 
-    /// Возвращает range (max - min).
+    /// Returns `max - min`.
     pub fn range(&self) -> Option<f64> {
         if self.count > 0 {
             Some(self.max - self.min)
@@ -187,7 +187,7 @@ impl RunningMinMax {
         }
     }
 
-    /// Сбрасывает состояние.
+    /// Resets the accumulator.
     pub fn reset(&mut self) {
         self.min = f64::INFINITY;
         self.max = f64::NEG_INFINITY;
@@ -201,7 +201,7 @@ impl Default for RunningMinMax {
     }
 }
 
-/// Экспоненциальное скользящее среднее (EMA).
+/// Exponential moving average (EMA).
 #[derive(Debug, Clone)]
 pub struct ExponentialMovingAverage {
     alpha: f64,
@@ -209,24 +209,22 @@ pub struct ExponentialMovingAverage {
 }
 
 impl ExponentialMovingAverage {
-    /// Создает EMA с заданным коэффициентом сглаживания.
+    /// Creates an EMA with the given smoothing factor.
     ///
-    /// alpha должен быть в диапазоне (0, 1].
-    /// Меньшие значения дают более гладкое среднее.
+    /// `alpha` must be in `(0, 1]`. Smaller values produce smoother curves.
     pub fn new(alpha: f64) -> Self {
         assert!(alpha > 0.0 && alpha <= 1.0, "alpha must be in (0, 1]");
         Self { alpha, value: None }
     }
 
-    /// Создает EMA с коэффициентом, вычисленным из span.
-    ///
-    /// alpha = 2 / (span + 1)
+    /// Creates an EMA with `alpha` derived from a span:
+    /// `alpha = 2 / (span + 1)`.
     pub fn from_span(span: usize) -> Self {
         let alpha = 2.0 / (span as f64 + 1.0);
         Self::new(alpha)
     }
 
-    /// Добавляет значение.
+    /// Adds a value.
     pub fn update(&mut self, value: f64) {
         self.value = Some(match self.value {
             Some(prev) => self.alpha * value + (1.0 - self.alpha) * prev,
@@ -234,63 +232,61 @@ impl ExponentialMovingAverage {
         });
     }
 
-    /// Возвращает текущее EMA.
+    /// Returns the current EMA value.
     pub fn compute(&self) -> Option<f64> {
         self.value
     }
 
-    /// Сбрасывает состояние.
+    /// Resets the accumulator.
     pub fn reset(&mut self) {
         self.value = None;
     }
 }
 
-/// Логгер метрик для отслеживания множества метрик во время обучения.
+/// Metric logger for tracking multiple metrics across training.
 #[derive(Debug, Clone, Default)]
 pub struct MetricLogger {
-    /// История значений метрик по эпохам
+    /// Per-epoch history of metric values.
     history: HashMap<String, Vec<f64>>,
-    /// Текущие значения (для текущей эпохи)
+    /// Running means for the current epoch.
     current: HashMap<String, RunningMean>,
-    /// Лучшие значения
-    best: HashMap<String, (f64, usize)>, // (value, epoch)
-    /// Текущая эпоха
+    /// Best value seen per metric as `(value, epoch)`.
+    best: HashMap<String, (f64, usize)>,
+    /// Current epoch counter.
     epoch: usize,
 }
 
 impl MetricLogger {
-    /// Создает новый MetricLogger.
+    /// Creates a new `MetricLogger`.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Логирует значение метрики.
+    /// Logs a single metric value for the current epoch.
     pub fn log(&mut self, name: &str, value: f64) {
         self.current
             .entry(name.to_string())
-            .or_insert_with(RunningMean::new)
+            .or_default()
             .update(value);
     }
 
-    /// Логирует несколько метрик сразу.
+    /// Logs several metrics at once.
     pub fn log_dict(&mut self, metrics: &HashMap<String, f64>) {
         for (name, &value) in metrics {
             self.log(name, value);
         }
     }
 
-    /// Завершает эпоху: сохраняет средние значения и обновляет best.
+    /// Finalises the current epoch: snapshots averages to `history` and
+    /// refreshes the `best` record (minimisation is assumed).
     pub fn end_epoch(&mut self) {
         for (name, running_mean) in &self.current {
             let value = running_mean.compute();
 
-            // Добавляем в историю
-            self.history
-                .entry(name.clone())
-                .or_insert_with(Vec::new)
-                .push(value);
+            // Append to history.
+            self.history.entry(name.clone()).or_default().push(value);
 
-            // Обновляем лучшее значение (предполагаем минимизацию)
+            // Update the best value (minimisation is assumed).
             let is_better = match self.best.get(name) {
                 Some((best_val, _)) => value < *best_val,
                 None => true,
@@ -300,42 +296,42 @@ impl MetricLogger {
             }
         }
 
-        // Очищаем текущие значения
+        // Clear per-epoch accumulators.
         self.current.clear();
         self.epoch += 1;
     }
 
-    /// Возвращает историю метрики.
+    /// Returns the full history for a metric.
     pub fn get_history(&self, name: &str) -> Option<&Vec<f64>> {
         self.history.get(name)
     }
 
-    /// Возвращает лучшее значение метрики.
+    /// Returns the best value and epoch for a metric.
     pub fn get_best(&self, name: &str) -> Option<(f64, usize)> {
         self.best.get(name).copied()
     }
 
-    /// Возвращает последнее значение метрики.
+    /// Returns the most recent epoch's value for a metric.
     pub fn get_last(&self, name: &str) -> Option<f64> {
         self.history.get(name).and_then(|h| h.last().copied())
     }
 
-    /// Возвращает текущее среднее (в рамках эпохи).
+    /// Returns the running mean inside the current (unfinished) epoch.
     pub fn get_current_mean(&self, name: &str) -> Option<f64> {
         self.current.get(name).map(|m| m.compute())
     }
 
-    /// Возвращает текущую эпоху.
+    /// Returns the current epoch number.
     pub fn current_epoch(&self) -> usize {
         self.epoch
     }
 
-    /// Возвращает все имена метрик.
+    /// Returns the names of every metric that has ever been logged.
     pub fn metric_names(&self) -> Vec<&String> {
         self.history.keys().collect()
     }
 
-    /// Возвращает сводку по всем метрикам.
+    /// Returns a `MetricSummary` per metric (last / best / mean / epochs).
     pub fn summary(&self) -> HashMap<String, MetricSummary> {
         let mut result = HashMap::new();
 
@@ -363,7 +359,7 @@ impl MetricLogger {
         result
     }
 
-    /// Форматирует текущее состояние для вывода.
+    /// Formats the in-progress epoch as `"loss: 0.123 | accuracy: 0.987"`.
     pub fn format_current(&self) -> String {
         let mut parts: Vec<String> = self
             .current
@@ -374,7 +370,8 @@ impl MetricLogger {
         parts.join(" | ")
     }
 
-    /// Форматирует результаты эпохи.
+    /// Formats a finished epoch for printing, marking the best epoch with a
+    /// trailing `" *"`.
     pub fn format_epoch(&self, epoch: usize) -> String {
         let mut parts: Vec<String> = Vec::new();
 
@@ -392,7 +389,7 @@ impl MetricLogger {
         format!("Epoch {}: {}", epoch, parts.join(" | "))
     }
 
-    /// Сбрасывает состояние логгера.
+    /// Resets the logger to a clean state.
     pub fn reset(&mut self) {
         self.history.clear();
         self.current.clear();
@@ -401,53 +398,53 @@ impl MetricLogger {
     }
 }
 
-/// Сводка по метрике.
+/// Snapshot of a single metric's history.
 #[derive(Debug, Clone)]
 pub struct MetricSummary {
-    /// Последнее значение
+    /// Last recorded value.
     pub last: Option<f64>,
-    /// Лучшее значение
+    /// Best value ever recorded.
     pub best_value: Option<f64>,
-    /// Эпоха лучшего значения
+    /// Epoch at which the best value was recorded.
     pub best_epoch: Option<usize>,
-    /// Среднее по всем эпохам
+    /// Mean over all recorded values.
     pub mean: Option<f64>,
-    /// Количество эпох
+    /// Total number of epochs recorded.
     pub epochs: usize,
 }
 
-/// Трекер для early stopping.
+/// Early-stopping tracker.
 #[derive(Debug, Clone)]
 pub struct EarlyStopping {
-    /// Метрика для отслеживания
+    /// Name of the metric being watched.
     metric_name: String,
-    /// Режим: "min" или "max"
+    /// Whether we minimise or maximise the metric.
     mode: EarlyStoppingMode,
-    /// Количество эпох без улучшения до остановки
+    /// Number of epochs without improvement before stopping.
     patience: usize,
-    /// Минимальное улучшение для считания прогрессом
+    /// Minimum change to count as an improvement.
     min_delta: f64,
-    /// Текущий счетчик эпох без улучшения
+    /// Current count of epochs without improvement.
     counter: usize,
-    /// Лучшее значение
+    /// Best value seen so far.
     best_value: Option<f64>,
-    /// Эпоха лучшего значения
+    /// Epoch at which the best value was seen.
     best_epoch: usize,
-    /// Флаг остановки
+    /// Whether training should stop now.
     should_stop: bool,
 }
 
-/// Режим early stopping.
+/// Direction for early stopping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EarlyStoppingMode {
-    /// Минимизация метрики (например, loss)
+    /// Minimise the metric (e.g. loss).
     Min,
-    /// Максимизация метрики (например, accuracy)
+    /// Maximise the metric (e.g. accuracy).
     Max,
 }
 
 impl EarlyStopping {
-    /// Создает новый EarlyStopping для минимизации.
+    /// Creates an `EarlyStopping` that minimises `metric_name`.
     pub fn minimize(metric_name: &str, patience: usize) -> Self {
         Self {
             metric_name: metric_name.to_string(),
@@ -461,7 +458,7 @@ impl EarlyStopping {
         }
     }
 
-    /// Создает новый EarlyStopping для максимизации.
+    /// Creates an `EarlyStopping` that maximises `metric_name`.
     pub fn maximize(metric_name: &str, patience: usize) -> Self {
         Self {
             metric_name: metric_name.to_string(),
@@ -475,13 +472,14 @@ impl EarlyStopping {
         }
     }
 
-    /// Устанавливает минимальное улучшение.
+    /// Sets the minimum delta that counts as an improvement.
     pub fn with_min_delta(mut self, min_delta: f64) -> Self {
         self.min_delta = min_delta;
         self
     }
 
-    /// Проверяет значение метрики и обновляет состояние.
+    /// Records a metric value for `epoch` and returns whether training
+    /// should stop.
     pub fn check(&mut self, value: f64, epoch: usize) -> bool {
         let is_better = match (self.mode, self.best_value) {
             (EarlyStoppingMode::Min, Some(best)) => value < best - self.min_delta,
@@ -503,32 +501,32 @@ impl EarlyStopping {
         self.should_stop
     }
 
-    /// Возвращает имя отслеживаемой метрики.
+    /// Returns the name of the tracked metric.
     pub fn metric_name(&self) -> &str {
         &self.metric_name
     }
 
-    /// Возвращает лучшее значение.
+    /// Returns the best value seen so far.
     pub fn best_value(&self) -> Option<f64> {
         self.best_value
     }
 
-    /// Возвращает эпоху лучшего значения.
+    /// Returns the epoch at which the best value was seen.
     pub fn best_epoch(&self) -> usize {
         self.best_epoch
     }
 
-    /// Проверяет, нужно ли остановиться.
+    /// Returns whether training should stop now.
     pub fn should_stop(&self) -> bool {
         self.should_stop
     }
 
-    /// Возвращает текущий счетчик терпения.
+    /// Returns the current patience counter (epochs without improvement).
     pub fn counter(&self) -> usize {
         self.counter
     }
 
-    /// Сбрасывает состояние.
+    /// Resets the tracker to a clean state.
     pub fn reset(&mut self) {
         self.counter = 0;
         self.best_value = None;
@@ -595,13 +593,13 @@ mod tests {
     fn test_metric_logger() {
         let mut logger = MetricLogger::new();
 
-        // Эпоха 0
+        // Epoch 0.
         logger.log("loss", 1.0);
         logger.log("loss", 0.8);
         logger.log("accuracy", 0.7);
         logger.end_epoch();
 
-        // Эпоха 1
+        // Epoch 1.
         logger.log("loss", 0.6);
         logger.log("loss", 0.5);
         logger.log("accuracy", 0.85);
@@ -617,15 +615,15 @@ mod tests {
     fn test_early_stopping() {
         let mut es = EarlyStopping::minimize("loss", 3);
 
-        // Улучшение
+        // Improvements.
         assert!(!es.check(1.0, 0));
         assert!(!es.check(0.9, 1));
         assert!(!es.check(0.8, 2));
 
-        // Без улучшения
+        // No improvement.
         assert!(!es.check(0.85, 3)); // counter = 1
-        assert!(!es.check(0.9, 4));  // counter = 2
-        assert!(es.check(0.95, 5));  // counter = 3, should_stop = true
+        assert!(!es.check(0.9, 4)); // counter = 2
+        assert!(es.check(0.95, 5)); // counter = 3, should_stop = true
 
         assert!(es.should_stop());
         assert_eq!(es.best_epoch(), 2);
@@ -639,7 +637,7 @@ mod tests {
         assert!(!es.check(0.7, 0));
         assert!(!es.check(0.8, 1));
         assert!(!es.check(0.75, 2)); // counter = 1
-        assert!(es.check(0.76, 3));  // counter = 2, should_stop
+        assert!(es.check(0.76, 3)); // counter = 2, should_stop
 
         assert_eq!(es.best_epoch(), 1);
     }

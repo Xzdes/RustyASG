@@ -1,24 +1,24 @@
-// --- Файл: src/data/dataloader.rs ---
+// --- File: src/data/dataloader.rs ---
 
-//! DataLoader - итератор по батчам данных.
+//! DataLoader - an iterator over data batches.
 
 use super::dataset::{Dataset, InMemoryDataset};
-use super::sampler::{BatchSampler, RandomSampler, Sampler, SequentialSampler};
+use super::sampler::{BatchSampler, RandomSampler, SequentialSampler};
 use ndarray::ArrayD;
 
-/// Батч данных - пара (features, labels).
+/// A data batch - a `(features, labels)` pair.
 #[derive(Debug, Clone)]
 pub struct Batch {
-    /// Признаки батча
+    /// Batch features.
     pub features: ArrayD<f32>,
-    /// Метки батча
+    /// Batch labels.
     pub labels: ArrayD<f32>,
-    /// Индексы образцов в этом батче
+    /// Indices of the samples in this batch.
     pub indices: Vec<usize>,
 }
 
 impl Batch {
-    /// Создает новый батч.
+    /// Creates a new batch.
     pub fn new(features: ArrayD<f32>, labels: ArrayD<f32>, indices: Vec<usize>) -> Self {
         Self {
             features,
@@ -27,20 +27,20 @@ impl Batch {
         }
     }
 
-    /// Возвращает размер батча.
+    /// Returns the batch size.
     pub fn len(&self) -> usize {
         self.indices.len()
     }
 
-    /// Проверяет, пуст ли батч.
+    /// Returns whether the batch is empty.
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }
 }
 
-/// DataLoader - удобный интерфейс для итерации по датасету батчами.
+/// DataLoader - convenient interface for iterating over a dataset in batches.
 ///
-/// # Пример
+/// # Example
 ///
 /// ```rust,ignore
 /// let loader = DataLoader::new(dataset, 32)
@@ -60,12 +60,12 @@ pub struct DataLoader {
 }
 
 impl DataLoader {
-    /// Создает новый DataLoader.
+    /// Creates a new DataLoader.
     ///
-    /// # Аргументы
+    /// # Arguments
     ///
-    /// * `dataset` - Датасет для загрузки
-    /// * `batch_size` - Размер батча
+    /// * `dataset` - Dataset to load from.
+    /// * `batch_size` - Batch size.
     pub fn new(dataset: InMemoryDataset, batch_size: usize) -> Self {
         Self {
             dataset,
@@ -76,51 +76,51 @@ impl DataLoader {
         }
     }
 
-    /// Включает/выключает перемешивание данных.
+    /// Enables or disables data shuffling.
     pub fn shuffle(mut self, shuffle: bool) -> Self {
         self.shuffle = shuffle;
         self
     }
 
-    /// Устанавливает, нужно ли отбрасывать последний неполный батч.
+    /// Controls whether the last, incomplete batch is dropped.
     pub fn drop_last(mut self, drop_last: bool) -> Self {
         self.drop_last = drop_last;
         self
     }
 
-    /// Устанавливает seed для воспроизводимости.
+    /// Sets the seed for reproducibility.
     pub fn seed(mut self, seed: u64) -> Self {
         self.seed = Some(seed);
         self
     }
 
-    /// Возвращает количество батчей.
+    /// Returns the number of batches.
     pub fn num_batches(&self) -> usize {
         let n = self.dataset.len();
         if self.drop_last {
             n / self.batch_size
         } else {
-            (n + self.batch_size - 1) / self.batch_size
+            n.div_ceil(self.batch_size)
         }
     }
 
-    /// Возвращает размер датасета.
+    /// Returns the dataset size.
     pub fn len(&self) -> usize {
         self.dataset.len()
     }
 
-    /// Проверяет, пуст ли DataLoader.
+    /// Returns whether the DataLoader is empty.
     pub fn is_empty(&self) -> bool {
         self.dataset.is_empty()
     }
 
-    /// Возвращает размер батча.
+    /// Returns the batch size.
     pub fn batch_size(&self) -> usize {
         self.batch_size
     }
 
-    /// Создает итератор по батчам.
-    pub fn iter(&self) -> DataLoaderIterator {
+    /// Creates an iterator over batches.
+    pub fn iter(&self) -> DataLoaderIterator<'_> {
         if self.shuffle {
             let sampler = if let Some(seed) = self.seed {
                 RandomSampler::with_seed(self.dataset.len(), seed)
@@ -143,7 +143,7 @@ impl DataLoader {
     }
 }
 
-/// Enum для хранения разных типов batch sampler'ов.
+/// Enum holding different batch sampler types.
 enum BatchSamplerEnum {
     Sequential(BatchSampler<SequentialSampler>),
     Random(BatchSampler<RandomSampler>),
@@ -160,7 +160,7 @@ impl Iterator for BatchSamplerEnum {
     }
 }
 
-/// Итератор по батчам данных.
+/// Iterator over data batches.
 pub struct DataLoaderIterator<'a> {
     dataset: &'a InMemoryDataset,
     batch_sampler: BatchSamplerEnum,
@@ -179,7 +179,7 @@ impl<'a> Iterator for DataLoaderIterator<'a> {
     }
 }
 
-/// Конструктор DataLoader с более гибкими опциями.
+/// DataLoader builder with more flexible options.
 pub struct DataLoaderBuilder {
     batch_size: usize,
     shuffle: bool,
@@ -203,48 +203,48 @@ impl Default for DataLoaderBuilder {
 }
 
 impl DataLoaderBuilder {
-    /// Создает новый builder.
+    /// Creates a new builder.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Устанавливает размер батча.
+    /// Sets the batch size.
     pub fn batch_size(mut self, size: usize) -> Self {
         self.batch_size = size;
         self
     }
 
-    /// Включает перемешивание.
+    /// Enables shuffling.
     pub fn shuffle(mut self, shuffle: bool) -> Self {
         self.shuffle = shuffle;
         self
     }
 
-    /// Устанавливает drop_last.
+    /// Sets `drop_last`.
     pub fn drop_last(mut self, drop_last: bool) -> Self {
         self.drop_last = drop_last;
         self
     }
 
-    /// Устанавливает seed.
+    /// Sets the seed.
     pub fn seed(mut self, seed: u64) -> Self {
         self.seed = Some(seed);
         self
     }
 
-    /// Устанавливает количество worker потоков (placeholder для будущей реализации).
+    /// Sets the number of worker threads (placeholder for future implementation).
     pub fn num_workers(mut self, num: usize) -> Self {
         self.num_workers = num;
         self
     }
 
-    /// Устанавливает pin_memory (placeholder для будущей GPU оптимизации).
+    /// Sets `pin_memory` (placeholder for future GPU optimization).
     pub fn pin_memory(mut self, pin: bool) -> Self {
         self.pin_memory = pin;
         self
     }
 
-    /// Строит DataLoader.
+    /// Builds the DataLoader.
     pub fn build(self, dataset: InMemoryDataset) -> DataLoader {
         let mut loader = DataLoader::new(dataset, self.batch_size)
             .shuffle(self.shuffle)
@@ -266,11 +266,13 @@ mod tests {
         let features = ArrayD::from_shape_vec(
             ndarray::IxDyn(&[10, 4]),
             (0..40).map(|x| x as f32).collect(),
-        ).unwrap();
+        )
+        .unwrap();
         let labels = ArrayD::from_shape_vec(
             ndarray::IxDyn(&[10, 1]),
             (0..10).map(|x| x as f32).collect(),
-        ).unwrap();
+        )
+        .unwrap();
         InMemoryDataset::new(features, labels)
     }
 
@@ -285,7 +287,7 @@ mod tests {
         let batches: Vec<_> = loader.iter().collect();
         assert_eq!(batches.len(), 4);
         assert_eq!(batches[0].len(), 3);
-        assert_eq!(batches[3].len(), 1); // Последний неполный батч
+        assert_eq!(batches[3].len(), 1); // Last incomplete batch
     }
 
     #[test]
@@ -303,7 +305,7 @@ mod tests {
         let loader = DataLoader::new(dataset, 10).shuffle(true).seed(42);
 
         let batch = loader.iter().next().unwrap();
-        // При shuffle индексы должны быть перемешаны
+        // When shuffling is enabled the indices must be permuted.
         assert_eq!(batch.len(), 10);
     }
 

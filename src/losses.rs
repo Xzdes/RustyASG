@@ -194,7 +194,7 @@ pub fn binary_cross_entropy(y_pred: &Tensor, y_true: &Tensor, eps: f32) -> Tenso
     let one = Tensor::scalar(&y_pred.context, 1.0);
 
     // log(y_pred + eps)
-    let log_pred = (&(y_pred + &eps_tensor)).log();
+    let log_pred = (y_pred + &eps_tensor).log();
 
     // log(1 - y_pred + eps)
     let one_minus_pred = &one - y_pred;
@@ -265,8 +265,8 @@ pub fn kl_divergence(p: &Tensor, q: &Tensor, eps: f32) -> Tensor {
     let eps_tensor = Tensor::scalar(&p.context, eps);
 
     // log(P / Q) = log(P + eps) - log(Q + eps)
-    let log_p = (&(p + &eps_tensor)).log();
-    let log_q = (&(q + &eps_tensor)).log();
+    let log_p = (p + &eps_tensor).log();
+    let log_q = (q + &eps_tensor).log();
     let log_ratio = &log_p - &log_q;
 
     // P * log(P / Q)
@@ -351,13 +351,7 @@ pub fn squared_hinge_loss(y_pred: &Tensor, y_true: &Tensor, margin: f32) -> Tens
 /// * `alpha` - Balancing coefficient (default: 0.25)
 /// * `gamma` - Focusing parameter (default: 2.0)
 /// * `eps` - Small value for numerical stability
-pub fn focal_loss(
-    y_pred: &Tensor,
-    y_true: &Tensor,
-    alpha: f32,
-    gamma: f32,
-    eps: f32,
-) -> Tensor {
+pub fn focal_loss(y_pred: &Tensor, y_true: &Tensor, alpha: f32, gamma: f32, eps: f32) -> Tensor {
     let alpha_tensor = Tensor::scalar(&y_pred.context, alpha);
     let one = Tensor::scalar(&y_pred.context, 1.0);
     let eps_tensor = Tensor::scalar(&y_pred.context, eps);

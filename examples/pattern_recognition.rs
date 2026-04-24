@@ -10,6 +10,9 @@
 //!
 //! Run with: `cargo run --example simple_cnn`
 
+// Demo code: readability-first style.
+#![allow(clippy::needless_range_loop)]
+
 use ndarray::{ArrayD, IxDyn};
 use rustyasg::analysis::shape_inference::ShapeInference;
 use rustyasg::asg::{DType, NodeType, Value};
@@ -45,19 +48,35 @@ fn generate_pattern_data(num_samples: usize, image_size: usize) -> (ArrayD<f32>,
                 let value = match class_id {
                     0 => {
                         // Horizontal stripes
-                        if row % 2 == 0 { 0.9 + noise } else { 0.1 - noise }
+                        if row % 2 == 0 {
+                            0.9 + noise
+                        } else {
+                            0.1 - noise
+                        }
                     }
                     1 => {
                         // Vertical stripes
-                        if col % 2 == 0 { 0.9 + noise } else { 0.1 - noise }
+                        if col % 2 == 0 {
+                            0.9 + noise
+                        } else {
+                            0.1 - noise
+                        }
                     }
                     2 => {
                         // Diagonal pattern (top-left to bottom-right)
-                        if (row + col) % 2 == 0 { 0.9 + noise } else { 0.1 - noise }
+                        if (row + col) % 2 == 0 {
+                            0.9 + noise
+                        } else {
+                            0.1 - noise
+                        }
                     }
                     3 => {
                         // Checkerboard (opposite of diagonal)
-                        if (row + col + 1) % 2 == 0 { 0.9 + noise } else { 0.1 - noise }
+                        if (row + col + 1) % 2 == 0 {
+                            0.9 + noise
+                        } else {
+                            0.1 - noise
+                        }
                     }
                     _ => 0.0,
                 };
@@ -71,14 +90,8 @@ fn generate_pattern_data(num_samples: usize, image_size: usize) -> (ArrayD<f32>,
     }
 
     // Flatten to [N, pixels]
-    let images_arr = ArrayD::from_shape_vec(
-        IxDyn(&[num_samples, pixels]),
-        images
-    ).unwrap();
-    let labels_arr = ArrayD::from_shape_vec(
-        IxDyn(&[num_samples, num_classes]),
-        labels
-    ).unwrap();
+    let images_arr = ArrayD::from_shape_vec(IxDyn(&[num_samples, pixels]), images).unwrap();
+    let labels_arr = ArrayD::from_shape_vec(IxDyn(&[num_samples, num_classes]), labels).unwrap();
 
     (images_arr, labels_arr)
 }
@@ -106,7 +119,7 @@ fn main() {
     println!("=== RustyASG Pattern Recognition Neural Network ===\n");
 
     // Configuration
-    let image_size = 8;  // 8x8 images = 64 input features
+    let image_size = 8; // 8x8 images = 64 input features
     let num_classes = 4;
     let num_train = 200;
     let num_test = 40;
@@ -116,9 +129,15 @@ fn main() {
 
     // Generate data
     println!("Generating pattern data...");
-    println!("  - Image size: {}x{} ({} features)", image_size, image_size, input_size);
+    println!(
+        "  - Image size: {}x{} ({} features)",
+        image_size, image_size, input_size
+    );
     println!("  - Classes: {}", num_classes);
-    println!("  - Train samples: {}, Test samples: {}\n", num_train, num_test);
+    println!(
+        "  - Train samples: {}, Test samples: {}\n",
+        num_train, num_test
+    );
 
     let (train_images, train_labels) = generate_pattern_data(num_train, image_size);
     let (test_images, test_labels) = generate_pattern_data(num_test, image_size);
@@ -138,13 +157,13 @@ fn main() {
     let context = Rc::new(RefCell::new(GraphContext::new()));
 
     // Define inputs
-    let x = Tensor::new_input(&context, "x");          // [N, 64]
+    let x = Tensor::new_input(&context, "x"); // [N, 64]
     let y_true = Tensor::new_input(&context, "y_true"); // [N, 4]
 
-    // Build MLP: 64 -> 32 -> 16 -> 4
-    let layer1 = Linear::new(&context, "layer1"); // 64 -> 32
-    let layer2 = Linear::new(&context, "layer2"); // 32 -> 16
-    let layer3 = Linear::new(&context, "layer3"); // 16 -> 4
+    // Build MLP: 64 -> 32 -> 16 -> 4 (shapes/init auto-registered).
+    let layer1 = Linear::new(&context, "layer1", 64, 32);
+    let layer2 = Linear::new(&context, "layer2", 32, 16);
+    let layer3 = Linear::new(&context, "layer3", 16, 4);
 
     // Forward pass with ReLU activations
     let h1 = layer1.forward(&x).relu();
@@ -156,28 +175,44 @@ fn main() {
     let loss = mse_loss_mean(&y_pred, &y_true);
 
     // Set output
-    context.borrow_mut().main_graph_mut().set_output(loss.node_id);
+    context
+        .borrow_mut()
+        .main_graph_mut()
+        .set_output(loss.node_id);
 
     // Collect parameters
     let params: Vec<Tensor> = [
         layer1.parameters(),
         layer2.parameters(),
         layer3.parameters(),
-    ].concat();
+    ]
+    .concat();
     let param_ids: Vec<_> = params.iter().map(|p| p.node_id).collect();
 
     // Shape inference
     let mut initial_shapes = HashMap::new();
     initial_shapes.insert("x".to_string(), (vec![batch_size, input_size], DType::F32));
-    initial_shapes.insert("y_true".to_string(), (vec![batch_size, num_classes], DType::F32));
+    initial_shapes.insert(
+        "y_true".to_string(),
+        (vec![batch_size, num_classes], DType::F32),
+    );
 
     // Layer params
-    initial_shapes.insert("layer1.weights".to_string(), (vec![input_size, 32], DType::F32));
+    initial_shapes.insert(
+        "layer1.weights".to_string(),
+        (vec![input_size, 32], DType::F32),
+    );
     initial_shapes.insert("layer1.bias".to_string(), (vec![1, 32], DType::F32));
     initial_shapes.insert("layer2.weights".to_string(), (vec![32, 16], DType::F32));
     initial_shapes.insert("layer2.bias".to_string(), (vec![1, 16], DType::F32));
-    initial_shapes.insert("layer3.weights".to_string(), (vec![16, num_classes], DType::F32));
-    initial_shapes.insert("layer3.bias".to_string(), (vec![1, num_classes], DType::F32));
+    initial_shapes.insert(
+        "layer3.weights".to_string(),
+        (vec![16, num_classes], DType::F32),
+    );
+    initial_shapes.insert(
+        "layer3.bias".to_string(),
+        (vec![1, num_classes], DType::F32),
+    );
 
     let mut forward_graph = context.borrow().main_graph().clone();
     ShapeInference::run(&mut forward_graph, &initial_shapes).expect("Shape inference failed");
@@ -200,7 +235,7 @@ fn main() {
         (0..fan_in * fan_out)
             .map(|i| {
                 // Pseudo-random using golden ratio
-                let x = (i as f32 * 0.618033988749895) % 1.0;
+                let x = (i as f32 * 0.618_034) % 1.0;
                 (x * 2.0 - 1.0) * scale
             })
             .collect()
@@ -209,7 +244,9 @@ fn main() {
     // Layer 1: 64 -> 32
     param_values.insert(
         "layer1.weights".to_string(),
-        Value::Tensor(ArrayD::from_shape_vec(IxDyn(&[input_size, 32]), xavier_init(input_size, 32)).unwrap()),
+        Value::Tensor(
+            ArrayD::from_shape_vec(IxDyn(&[input_size, 32]), xavier_init(input_size, 32)).unwrap(),
+        ),
     );
     param_values.insert(
         "layer1.bias".to_string(),
@@ -229,7 +266,10 @@ fn main() {
     // Layer 3: 16 -> 4
     param_values.insert(
         "layer3.weights".to_string(),
-        Value::Tensor(ArrayD::from_shape_vec(IxDyn(&[16, num_classes]), xavier_init(16, num_classes)).unwrap()),
+        Value::Tensor(
+            ArrayD::from_shape_vec(IxDyn(&[16, num_classes]), xavier_init(16, num_classes))
+                .unwrap(),
+        ),
     );
     param_values.insert(
         "layer3.bias".to_string(),
@@ -302,9 +342,12 @@ fn main() {
 
             // Extract gradients
             let param_names = [
-                "layer1.weights", "layer1.bias",
-                "layer2.weights", "layer2.bias",
-                "layer3.weights", "layer3.bias",
+                "layer1.weights",
+                "layer1.bias",
+                "layer2.weights",
+                "layer2.bias",
+                "layer3.weights",
+                "layer3.bias",
             ];
             let mut gradients: HashMap<String, Value> = HashMap::new();
             for (i, name) in param_names.iter().enumerate() {
@@ -319,7 +362,14 @@ fn main() {
 
         // Evaluate periodically
         if epoch % 10 == 0 || epoch == epochs - 1 {
-            let accuracy = evaluate_accuracy(&backend, &param_values, &train_images, &train_labels, num_train, num_classes);
+            let accuracy = evaluate_accuracy(
+                &backend,
+                &param_values,
+                &train_images,
+                &train_labels,
+                num_train,
+                num_classes,
+            );
             let avg_loss = epoch_loss / num_batches as f32;
             println!("{:5} | {:.6} | {:.1}%", epoch, avg_loss, accuracy);
         }
@@ -328,8 +378,22 @@ fn main() {
     // Final evaluation on test set
     println!("\n=== Test Set Evaluation ===\n");
 
-    let test_accuracy = evaluate_accuracy(&backend, &param_values, &test_images, &test_labels, num_test, num_classes);
-    let train_accuracy = evaluate_accuracy(&backend, &param_values, &train_images, &train_labels, num_train, num_classes);
+    let test_accuracy = evaluate_accuracy(
+        &backend,
+        &param_values,
+        &test_images,
+        &test_labels,
+        num_test,
+        num_classes,
+    );
+    let train_accuracy = evaluate_accuracy(
+        &backend,
+        &param_values,
+        &train_images,
+        &train_labels,
+        num_train,
+        num_classes,
+    );
 
     println!("Train Accuracy: {:.1}%", train_accuracy);
     println!("Test Accuracy:  {:.1}%\n", test_accuracy);
@@ -352,13 +416,22 @@ fn main() {
         let true_class = i % num_classes;
         let pred_class = predictions[i];
         let is_correct = pred_class == true_class;
-        if is_correct { correct_count += 1; }
+        if is_correct {
+            correct_count += 1;
+        }
         let mark = if is_correct { "Yes" } else { "No " };
-        println!("  {:3}  |  {}   |  {}   |  {}", i, true_class, pred_class, mark);
+        println!(
+            "  {:3}  |  {}   |  {}   |  {}",
+            i, true_class, pred_class, mark
+        );
     }
 
-    println!("\nTotal: {}/{} correct ({:.1}%)", correct_count, num_test.min(20),
-             correct_count as f32 / num_test.min(20) as f32 * 100.0);
+    println!(
+        "\nTotal: {}/{} correct ({:.1}%)",
+        correct_count,
+        num_test.min(20),
+        correct_count as f32 / num_test.min(20) as f32 * 100.0
+    );
 
     println!("\n=== Training Complete ===");
 }
@@ -368,7 +441,7 @@ fn evaluate_accuracy(
     backend: &CpuBackend,
     param_values: &HashMap<String, Value>,
     images: &ArrayD<f32>,
-    labels: &ArrayD<f32>,
+    _labels: &ArrayD<f32>,
     num_samples: usize,
     num_classes: usize,
 ) -> f32 {
@@ -397,16 +470,19 @@ fn get_predictions(
     let inf_context = Rc::new(RefCell::new(GraphContext::new()));
 
     let x_inf = Tensor::new_input(&inf_context, "x");
-    let layer1_inf = Linear::new(&inf_context, "layer1");
-    let layer2_inf = Linear::new(&inf_context, "layer2");
-    let layer3_inf = Linear::new(&inf_context, "layer3");
+    let layer1_inf = Linear::new(&inf_context, "layer1", 64, 32);
+    let layer2_inf = Linear::new(&inf_context, "layer2", 32, 16);
+    let layer3_inf = Linear::new(&inf_context, "layer3", 16, 4);
 
     let h1 = layer1_inf.forward(&x_inf).relu();
     let h2 = layer2_inf.forward(&h1).relu();
     let logits = layer3_inf.forward(&h2);
     let y_pred = logits.sigmoid();
 
-    inf_context.borrow_mut().main_graph_mut().set_output(y_pred.node_id);
+    inf_context
+        .borrow_mut()
+        .main_graph_mut()
+        .set_output(y_pred.node_id);
 
     // Prepare inputs
     let mut inputs = param_values.clone();

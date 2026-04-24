@@ -82,15 +82,26 @@ impl<'a> ExecutionContext<'a> {
                 return Err(RuntimeError::MissingParameter(name.clone(), node.id));
             }
             NodeType::Literal(value) => Ok(value.clone()),
-            NodeType::External { source_asg_id, source_node_id, .. } => {
-                self.memo.get(&(*source_asg_id, *source_node_id))
-                    .cloned()
-                    .ok_or(RuntimeError::NodeNotFound(*source_node_id, *source_asg_id))
-            },
+            NodeType::External {
+                source_asg_id,
+                source_node_id,
+                ..
+            } => self
+                .memo
+                .get(&(*source_asg_id, *source_node_id))
+                .cloned()
+                .ok_or(RuntimeError::NodeNotFound(*source_node_id, *source_asg_id)),
 
-            NodeType::Add(l, r) | NodeType::Subtract(l, r) | NodeType::Multiply(l, r) | NodeType::Divide(l, r) |
-            NodeType::MatrixMultiply(l, r) | NodeType::GreaterThan(l, r) | NodeType::Power(l, r) |
-            NodeType::Reshape(l, r) | NodeType::Broadcast(l, r) | NodeType::ReduceSumTo(l, r) => {
+            NodeType::Add(l, r)
+            | NodeType::Subtract(l, r)
+            | NodeType::Multiply(l, r)
+            | NodeType::Divide(l, r)
+            | NodeType::MatrixMultiply(l, r)
+            | NodeType::GreaterThan(l, r)
+            | NodeType::Power(l, r)
+            | NodeType::Reshape(l, r)
+            | NodeType::Broadcast(l, r)
+            | NodeType::ReduceSumTo(l, r) => {
                 let lhs = self.evaluate_node(asg_id, *l)?;
                 let rhs = self.evaluate_node(asg_id, *r)?;
                 match &node.node_type {
@@ -108,10 +119,20 @@ impl<'a> ExecutionContext<'a> {
                 }
             }
 
-            NodeType::ReLU(op) | NodeType::Sigmoid(op) | NodeType::Softmax(op) | NodeType::Sum(op) |
-            NodeType::Mean(op) | NodeType::Variance(op) | NodeType::Sqrt(op) | NodeType::Exp(op) |
-            NodeType::Abs(op) | NodeType::Neg(op) | NodeType::Log(op) | NodeType::Tanh(op) |
-            NodeType::GELU(op) | NodeType::SiLU(op) => {
+            NodeType::ReLU(op)
+            | NodeType::Sigmoid(op)
+            | NodeType::Softmax(op)
+            | NodeType::Sum(op)
+            | NodeType::Mean(op)
+            | NodeType::Variance(op)
+            | NodeType::Sqrt(op)
+            | NodeType::Exp(op)
+            | NodeType::Abs(op)
+            | NodeType::Neg(op)
+            | NodeType::Log(op)
+            | NodeType::Tanh(op)
+            | NodeType::GELU(op)
+            | NodeType::SiLU(op) => {
                 let operand = self.evaluate_node(asg_id, *op)?;
                 match &node.node_type {
                     NodeType::ReLU(_) => op_relu(operand),
@@ -155,18 +176,35 @@ impl<'a> ExecutionContext<'a> {
                 op_transpose(operand, *ax1, *ax2)
             }
 
-            NodeType::MaxPool2d { input, kernel_size, stride } => {
+            NodeType::MaxPool2d {
+                input,
+                kernel_size,
+                stride,
+            } => {
                 let operand = self.evaluate_node(asg_id, *input)?;
                 op_max_pool2d(operand, *kernel_size, *stride)
             }
 
-            NodeType::MaxUnpool2d { input, original_input, kernel_size, stride } => {
+            NodeType::MaxUnpool2d {
+                input,
+                original_input,
+                kernel_size,
+                stride,
+            } => {
                 let operand = self.evaluate_node(asg_id, *input)?;
                 let original_operand = self.evaluate_node(asg_id, *original_input)?;
                 op_max_unpool2d(operand, original_operand, *kernel_size, *stride)
             }
 
-            NodeType::Conv2d { input, weight, bias, stride, padding, dilation, groups } => {
+            NodeType::Conv2d {
+                input,
+                weight,
+                bias,
+                stride,
+                padding,
+                dilation,
+                groups,
+            } => {
                 let input_val = self.evaluate_node(asg_id, *input)?;
                 let weight_val = self.evaluate_node(asg_id, *weight)?;
                 let bias_val = if let Some(b) = bias {
@@ -174,10 +212,21 @@ impl<'a> ExecutionContext<'a> {
                 } else {
                     None
                 };
-                op_conv2d(input_val, weight_val, bias_val, *stride, *padding, *dilation, *groups)
+                op_conv2d(
+                    input_val, weight_val, bias_val, *stride, *padding, *dilation, *groups,
+                )
             }
 
-            NodeType::ConvTranspose2d { input, weight, bias, stride, padding, output_padding, dilation, groups } => {
+            NodeType::ConvTranspose2d {
+                input,
+                weight,
+                bias,
+                stride,
+                padding,
+                output_padding,
+                dilation,
+                groups,
+            } => {
                 let input_val = self.evaluate_node(asg_id, *input)?;
                 let weight_val = self.evaluate_node(asg_id, *weight)?;
                 let bias_val = if let Some(b) = bias {
@@ -185,15 +234,35 @@ impl<'a> ExecutionContext<'a> {
                 } else {
                     None
                 };
-                op_conv_transpose2d(input_val, weight_val, bias_val, *stride, *padding, *output_padding, *dilation, *groups)
+                op_conv_transpose2d(
+                    input_val,
+                    weight_val,
+                    bias_val,
+                    *stride,
+                    *padding,
+                    *output_padding,
+                    *dilation,
+                    *groups,
+                )
             }
 
-            NodeType::AvgPool2d { input, kernel_size, stride, padding } => {
+            NodeType::AvgPool2d {
+                input,
+                kernel_size,
+                stride,
+                padding,
+            } => {
                 let operand = self.evaluate_node(asg_id, *input)?;
                 op_avg_pool2d(operand, *kernel_size, *stride, *padding)
             }
 
-            NodeType::AvgUnpool2d { input, original_input, kernel_size, stride, padding } => {
+            NodeType::AvgUnpool2d {
+                input,
+                original_input,
+                kernel_size,
+                stride,
+                padding,
+            } => {
                 let grad_val = self.evaluate_node(asg_id, *input)?;
                 let orig_val = self.evaluate_node(asg_id, *original_input)?;
                 op_avg_unpool2d(grad_val, orig_val, *kernel_size, *stride, *padding)
@@ -210,39 +279,89 @@ impl<'a> ExecutionContext<'a> {
                 op_embedding(indices_val, weight_val)
             }
 
-            NodeType::EmbeddingGrad { grad_output, indices, num_embeddings } => {
+            NodeType::EmbeddingGrad {
+                grad_output,
+                indices,
+                num_embeddings,
+            } => {
                 let grad_val = self.evaluate_node(asg_id, *grad_output)?;
                 let indices_val = self.evaluate_node(asg_id, *indices)?;
                 op_embedding_grad(grad_val, indices_val, *num_embeddings)
             }
 
-            NodeType::Conv2dBackwardInput { grad_output, weight, input_shape, stride, padding, dilation, groups } => {
+            NodeType::Conv2dBackwardInput {
+                grad_output,
+                weight,
+                input_shape,
+                stride,
+                padding,
+                dilation,
+                groups,
+            } => {
                 let grad_val = self.evaluate_node(asg_id, *grad_output)?;
                 let weight_val = self.evaluate_node(asg_id, *weight)?;
-                op_conv2d_backward_input(grad_val, weight_val, *input_shape, *stride, *padding, *dilation, *groups)
+                op_conv2d_backward_input(
+                    grad_val,
+                    weight_val,
+                    *input_shape,
+                    *stride,
+                    *padding,
+                    *dilation,
+                    *groups,
+                )
             }
 
-            NodeType::Conv2dBackwardWeight { grad_output, input, weight_shape, stride, padding, dilation, groups } => {
+            NodeType::Conv2dBackwardWeight {
+                grad_output,
+                input,
+                weight_shape,
+                stride,
+                padding,
+                dilation,
+                groups,
+            } => {
                 let grad_val = self.evaluate_node(asg_id, *grad_output)?;
                 let input_val = self.evaluate_node(asg_id, *input)?;
-                op_conv2d_backward_weight(grad_val, input_val, *weight_shape, *stride, *padding, *dilation, *groups)
+                op_conv2d_backward_weight(
+                    grad_val,
+                    input_val,
+                    *weight_shape,
+                    *stride,
+                    *padding,
+                    *dilation,
+                    *groups,
+                )
             }
 
-            NodeType::LayerNorm { input, gamma, beta, eps } => {
+            NodeType::LayerNorm {
+                input,
+                gamma,
+                beta,
+                eps,
+            } => {
                 let input_val = self.evaluate_node(asg_id, *input)?;
                 let gamma_val = self.evaluate_node(asg_id, *gamma)?;
                 let beta_val = self.evaluate_node(asg_id, *beta)?;
                 op_layer_norm(input_val, gamma_val, beta_val, *eps)
             }
 
-            NodeType::LayerNormBackward { grad_output, input, gamma, eps } => {
+            NodeType::LayerNormBackward {
+                grad_output,
+                input,
+                gamma,
+                eps,
+            } => {
                 let grad_val = self.evaluate_node(asg_id, *grad_output)?;
                 let input_val = self.evaluate_node(asg_id, *input)?;
                 let gamma_val = self.evaluate_node(asg_id, *gamma)?;
                 op_layer_norm_backward(grad_val, input_val, gamma_val, *eps)
             }
 
-            NodeType::LayerNormGradGamma { grad_output, input, eps } => {
+            NodeType::LayerNormGradGamma {
+                grad_output,
+                input,
+                eps,
+            } => {
                 let grad_val = self.evaluate_node(asg_id, *grad_output)?;
                 let input_val = self.evaluate_node(asg_id, *input)?;
                 op_layer_norm_grad_gamma(grad_val, input_val, *eps)
@@ -253,7 +372,38 @@ impl<'a> ExecutionContext<'a> {
                 op_layer_norm_grad_beta(grad_val)
             }
 
-            _ => Err(RuntimeError::UnimplementedOperation(format!("{:?}", node.node_type))),
+            NodeType::Slice {
+                input,
+                axis,
+                start,
+                end,
+            } => {
+                let input_val = self.evaluate_node(asg_id, *input)?;
+                op_slice(input_val, *axis, *start, *end)
+            }
+
+            NodeType::Concat { inputs, axis } => {
+                let mut vals = Vec::with_capacity(inputs.len());
+                for id in inputs {
+                    vals.push(self.evaluate_node(asg_id, *id)?);
+                }
+                op_concat(vals, *axis)
+            }
+
+            NodeType::SliceBackward {
+                grad_output,
+                axis,
+                start,
+                full_size,
+            } => {
+                let grad_val = self.evaluate_node(asg_id, *grad_output)?;
+                op_slice_backward(grad_val, *axis, *start, *full_size)
+            }
+
+            _ => Err(RuntimeError::UnimplementedOperation(format!(
+                "{:?}",
+                node.node_type
+            ))),
         }?;
 
         self.memo.insert((asg_id, node_id), result.clone());
@@ -264,11 +414,15 @@ impl<'a> ExecutionContext<'a> {
 pub struct CpuBackend;
 
 impl CpuBackend {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 impl Default for CpuBackend {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Backend for CpuBackend {
@@ -286,8 +440,10 @@ impl Backend for CpuBackend {
         main_asg: &Asg,
         initial_memo: Memo<Self::DeviceData>,
     ) -> Result<(Vec<Self::DeviceData>, Memo<Self::DeviceData>), RuntimeError> {
-        let sorted_nodes = crate::analysis::shape_inference::ShapeInference::topological_sort(main_asg)
-            .map_err(|e| RuntimeError::ShapeError(format!("Topological sort failed: {:?}", e)))?;
+        let sorted_nodes = crate::analysis::shape_inference::ShapeInference::topological_sort(
+            main_asg,
+        )
+        .map_err(|e| RuntimeError::ShapeError(format!("Topological sort failed: {:?}", e)))?;
 
         let mut context = ExecutionContext::new(main_asg, initial_memo);
 
@@ -297,7 +453,9 @@ impl Backend for CpuBackend {
 
         let mut results = Vec::new();
         for output_node_id in &main_asg.outputs {
-            let result = context.memo.get(&(main_asg.id, *output_node_id))
+            let result = context
+                .memo
+                .get(&(main_asg.id, *output_node_id))
                 .ok_or(RuntimeError::NodeNotFound(*output_node_id, main_asg.id))?
                 .clone();
             results.push(result);
@@ -310,28 +468,135 @@ impl Backend for CpuBackend {
     }
 }
 
-fn op_add(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a + &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_subtract(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a - &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_multiply(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a * &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_divide(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a / &b)), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_relu(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|val| val.max(0.0)))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_sigmoid(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| 1.0 / (1.0 + (-x).exp())))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_sum(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(ndarray::arr0(a.sum()).into_dyn())), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_sqrt(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.sqrt()))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_exp(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.exp()))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_abs(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.abs()))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_neg(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| -x))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_log(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.ln()))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_tanh(operand: Value) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.tanh()))), _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_add(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
+    match (lhs, rhs) {
+        (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a + &b)),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_subtract(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
+    match (lhs, rhs) {
+        (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a - &b)),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_multiply(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
+    match (lhs, rhs) {
+        (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a * &b)),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_divide(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
+    match (lhs, rhs) {
+        (Value::Tensor(a), Value::Tensor(b)) => Ok(Value::Tensor(&a / &b)),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_relu(operand: Value) -> Result<Value, RuntimeError> {
+    match operand {
+        Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|val| val.max(0.0)))),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_sigmoid(operand: Value) -> Result<Value, RuntimeError> {
+    match operand {
+        Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| 1.0 / (1.0 + (-x).exp())))),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_sum(operand: Value) -> Result<Value, RuntimeError> {
+    match operand {
+        Value::Tensor(a) => Ok(Value::Tensor(ndarray::arr0(a.sum()).into_dyn())),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_sqrt(operand: Value) -> Result<Value, RuntimeError> {
+    match operand {
+        Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.sqrt()))),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_exp(operand: Value) -> Result<Value, RuntimeError> {
+    match operand {
+        Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.exp()))),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_abs(operand: Value) -> Result<Value, RuntimeError> {
+    match operand {
+        Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.abs()))),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_neg(operand: Value) -> Result<Value, RuntimeError> {
+    match operand {
+        Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| -x))),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_log(operand: Value) -> Result<Value, RuntimeError> {
+    match operand {
+        Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.ln()))),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_tanh(operand: Value) -> Result<Value, RuntimeError> {
+    match operand {
+        Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.tanh()))),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
 
 fn op_gelu(operand: Value) -> Result<Value, RuntimeError> {
     // GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-    const SQRT_2_OVER_PI: f32 = 0.7978845608028654;
+    const SQRT_2_OVER_PI: f32 = 0.797_884_6;
     match operand {
         Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| {
             0.5 * x * (1.0 + (SQRT_2_OVER_PI * (x + 0.044715 * x.powi(3))).tanh())
         }))),
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
     }
 }
 
@@ -339,22 +604,43 @@ fn op_silu(operand: Value) -> Result<Value, RuntimeError> {
     // SiLU(x) = x * sigmoid(x) = x / (1 + exp(-x))
     match operand {
         Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x / (1.0 + (-x).exp())))),
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
     }
 }
 
 fn op_leaky_relu(operand: Value, negative_slope: f32) -> Result<Value, RuntimeError> {
     match operand {
-        Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| if x > 0.0 { x } else { negative_slope * x }))),
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+        Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| {
+            if x > 0.0 {
+                x
+            } else {
+                negative_slope * x
+            }
+        }))),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
     }
 }
 
 fn op_elu(operand: Value, alpha: f32) -> Result<Value, RuntimeError> {
     // ELU(x) = x if x > 0 else alpha * (exp(x) - 1)
     match operand {
-        Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| if x > 0.0 { x } else { alpha * (x.exp() - 1.0) }))),
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+        Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| {
+            if x > 0.0 {
+                x
+            } else {
+                alpha * (x.exp() - 1.0)
+            }
+        }))),
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
     }
 }
 
@@ -364,16 +650,26 @@ fn op_softplus(operand: Value, beta: f32) -> Result<Value, RuntimeError> {
     match operand {
         Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| {
             let bx = beta * x;
-            if bx > 20.0 { x } else { (1.0 + bx.exp()).ln() / beta }
+            if bx > 20.0 {
+                x
+            } else {
+                (1.0 + bx.exp()).ln() / beta
+            }
         }))),
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
     }
 }
 
 fn op_clamp(operand: Value, min_val: f32, max_val: f32) -> Result<Value, RuntimeError> {
     match operand {
         Value::Tensor(a) => Ok(Value::Tensor(a.mapv(|x| x.clamp(min_val, max_val)))),
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
     }
 }
 
@@ -383,8 +679,11 @@ fn op_mean(operand: Value) -> Result<Value, RuntimeError> {
             let axis = Axis(a.ndim() - 1);
             let mean = a.mean_axis(axis).unwrap();
             Ok(Value::Tensor(mean.insert_axis(axis).into_dyn()))
-        },
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+        }
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
     }
 }
 fn op_variance(operand: Value) -> Result<Value, RuntimeError> {
@@ -393,12 +692,37 @@ fn op_variance(operand: Value) -> Result<Value, RuntimeError> {
             let axis = Axis(a.ndim() - 1);
             let var = a.var_axis(axis, 0.0);
             Ok(Value::Tensor(var.insert_axis(axis).into_dyn()))
-        },
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+        }
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
     }
 }
-fn op_power(base: Value, power: Value) -> Result<Value, RuntimeError> { match (base, power) { (Value::Tensor(a), Value::Tensor(b)) if b.ndim() == 0 => Ok(Value::Tensor(a.mapv(|val| val.powf(*b.first().unwrap())))), _ => Err(RuntimeError::TypeError { expected: "Tensor and Scalar Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_transpose(operand: Value, axis1: usize, axis2: usize) -> Result<Value, RuntimeError> { match operand { Value::Tensor(a) => { let mut axes: Vec<_> = (0..a.ndim()).collect(); axes.swap(axis1, axis2); Ok(Value::Tensor(a.permuted_axes(axes))) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_power(base: Value, power: Value) -> Result<Value, RuntimeError> {
+    match (base, power) {
+        (Value::Tensor(a), Value::Tensor(b)) if b.ndim() == 0 => {
+            Ok(Value::Tensor(a.mapv(|val| val.powf(*b.first().unwrap()))))
+        }
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor and Scalar Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_transpose(operand: Value, axis1: usize, axis2: usize) -> Result<Value, RuntimeError> {
+    match operand {
+        Value::Tensor(a) => {
+            let mut axes: Vec<_> = (0..a.ndim()).collect();
+            axes.swap(axis1, axis2);
+            Ok(Value::Tensor(a.permuted_axes(axes)))
+        }
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
 fn op_broadcast(source: Value, target: Value) -> Result<Value, RuntimeError> {
     match (source, target) {
         (Value::Tensor(s), Value::Tensor(t)) => {
@@ -409,18 +733,57 @@ fn op_broadcast(source: Value, target: Value) -> Result<Value, RuntimeError> {
                 Ok(Value::Tensor(ndarray::ArrayD::from_elem(target_shape, val)))
             } else {
                 // Use ndarray broadcasting
-                let broadcasted = s.broadcast(target_shape)
-                    .ok_or_else(|| RuntimeError::ShapeError(
-                        format!("Cannot broadcast {:?} to {:?}", s.shape(), target_shape)
-                    ))?;
+                let broadcasted = s.broadcast(target_shape).ok_or_else(|| {
+                    RuntimeError::ShapeError(format!(
+                        "Cannot broadcast {:?} to {:?}",
+                        s.shape(),
+                        target_shape
+                    ))
+                })?;
                 Ok(Value::Tensor(broadcasted.to_owned()))
             }
-        },
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+        }
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
     }
 }
-fn op_reshape(source: Value, shape_provider: Value) -> Result<Value, RuntimeError> { match (source, shape_provider) { (Value::Tensor(s), Value::Tensor(p)) => { let shape: Vec<usize> = p.iter().map(|&x| x as usize).collect(); let reshaped = s.to_shape(shape.as_slice()).map_err(|e| RuntimeError::ShapeError(e.to_string()))?; Ok(Value::Tensor(reshaped.to_owned())) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
-fn op_greater_than(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> { match (lhs, rhs) { (Value::Tensor(a), Value::Tensor(b)) => { let mut r = a.clone(); if b.ndim() == 0 { r.mapv_inplace(|v| if v > *b.first().unwrap() { 1.0 } else { 0.0 }); } else { Zip::from(&mut r).and(&a).and(&b).for_each(|res, &va, &vb| *res = if va > vb { 1.0 } else { 0.0 }); } Ok(Value::Tensor(r)) }, _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) } }
+fn op_reshape(source: Value, shape_provider: Value) -> Result<Value, RuntimeError> {
+    match (source, shape_provider) {
+        (Value::Tensor(s), Value::Tensor(p)) => {
+            let shape: Vec<usize> = p.iter().map(|&x| x as usize).collect();
+            let reshaped = s
+                .to_shape(shape.as_slice())
+                .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+            Ok(Value::Tensor(reshaped.to_owned()))
+        }
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
+fn op_greater_than(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
+    match (lhs, rhs) {
+        (Value::Tensor(a), Value::Tensor(b)) => {
+            let mut r = a.clone();
+            if b.ndim() == 0 {
+                r.mapv_inplace(|v| if v > *b.first().unwrap() { 1.0 } else { 0.0 });
+            } else {
+                Zip::from(&mut r)
+                    .and(&a)
+                    .and(&b)
+                    .for_each(|res, &va, &vb| *res = if va > vb { 1.0 } else { 0.0 });
+            }
+            Ok(Value::Tensor(r))
+        }
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
+    }
+}
 fn op_softmax(operand: Value) -> Result<Value, RuntimeError> {
     match operand {
         Value::Tensor(a) => {
@@ -446,77 +809,204 @@ fn op_softmax(operand: Value) -> Result<Value, RuntimeError> {
                 }
             }
             Ok(Value::Tensor(result))
-        },
-        _ => Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() })
+        }
+        _ => Err(RuntimeError::TypeError {
+            expected: "Tensor".to_string(),
+            actual: "Other".to_string(),
+        }),
     }
 }
 fn op_matmul(lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
-    let a = match lhs { Value::Tensor(val) => val, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) };
-    let b = match rhs { Value::Tensor(val) => val, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }) };
+    let a = match lhs {
+        Value::Tensor(val) => val,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
+    };
+    let b = match rhs {
+        Value::Tensor(val) => val,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
+    };
     if a.ndim() == 4 && b.ndim() == 4 {
-        let (b0,b1,m,_,n) = (a.shape()[0],a.shape()[1],a.shape()[2],a.shape()[3],b.shape()[3]);
-        let mut out = ndarray::ArrayD::zeros(ndarray::IxDyn(&[b0,b1,m,n]));
-        for i in 0..b0 { for j in 0..b1 {
-            let a_mat=a.slice(s![i,j,..,..]).into_dimensionality::<Ix2>().unwrap();
-            let b_mat=b.slice(s![i,j,..,..]).into_dimensionality::<Ix2>().unwrap();
-            out.slice_mut(s![i,j,..,..]).assign(&a_mat.dot(&b_mat));
-        }}
+        let (b0, b1, m, _, n) = (
+            a.shape()[0],
+            a.shape()[1],
+            a.shape()[2],
+            a.shape()[3],
+            b.shape()[3],
+        );
+        let mut out = ndarray::ArrayD::zeros(ndarray::IxDyn(&[b0, b1, m, n]));
+        for i in 0..b0 {
+            for j in 0..b1 {
+                let a_mat = a
+                    .slice(s![i, j, .., ..])
+                    .into_dimensionality::<Ix2>()
+                    .unwrap();
+                let b_mat = b
+                    .slice(s![i, j, .., ..])
+                    .into_dimensionality::<Ix2>()
+                    .unwrap();
+                out.slice_mut(s![i, j, .., ..]).assign(&a_mat.dot(&b_mat));
+            }
+        }
         return Ok(Value::Tensor(out));
     } else if a.ndim() >= 2 && b.ndim() == 2 {
-        let a_mat=a.view().into_dimensionality::<Ix2>().unwrap();let b_mat=b.view().into_dimensionality::<Ix2>().unwrap();
-        if a_mat.shape()[1]!=b_mat.shape()[0]{return Err(RuntimeError::ShapeError(format!("Incompatible matmul shapes: {:?} and {:?}", a.shape(), b.shape())));}
+        let a_mat = a.view().into_dimensionality::<Ix2>().unwrap();
+        let b_mat = b.view().into_dimensionality::<Ix2>().unwrap();
+        if a_mat.shape()[1] != b_mat.shape()[0] {
+            return Err(RuntimeError::ShapeError(format!(
+                "Incompatible matmul shapes: {:?} and {:?}",
+                a.shape(),
+                b.shape()
+            )));
+        }
         return Ok(Value::Tensor(a_mat.dot(&b_mat).into_dyn()));
-    } else if a.ndim() == 0 || b.ndim() == 0 { return Ok(Value::Tensor(&a * &b)); }
-    Err(RuntimeError::UnimplementedOperation(format!("Matmul for dims {} and {}", a.ndim(), b.ndim())))
+    } else if a.ndim() == 0 || b.ndim() == 0 {
+        return Ok(Value::Tensor(&a * &b));
+    }
+    Err(RuntimeError::UnimplementedOperation(format!(
+        "Matmul for dims {} and {}",
+        a.ndim(),
+        b.ndim()
+    )))
 }
 
-fn op_max_pool2d(operand: Value, kernel_size: (usize, usize), stride: (usize, usize)) -> Result<Value, RuntimeError> {
-    let input_tensor = match operand { Value::Tensor(val) => val, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }), };
-    let input_arr: Array4<f32> = input_tensor.into_dimensionality().map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+fn op_max_pool2d(
+    operand: Value,
+    kernel_size: (usize, usize),
+    stride: (usize, usize),
+) -> Result<Value, RuntimeError> {
+    let input_tensor = match operand {
+        Value::Tensor(val) => val,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
+    };
+    let input_arr: Array4<f32> = input_tensor
+        .into_dimensionality()
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
     let (n, c, h, w) = input_arr.dim();
     let (kh, kw) = kernel_size;
     let (sh, sw) = stride;
     let out_h = (h - kh) / sh + 1;
     let out_w = (w - kw) / sw + 1;
     let mut output_arr = Array4::<f32>::zeros((n, c, out_h, out_w));
-    for n_idx in 0..n { for c_idx in 0..c { for oh_idx in 0..out_h { for ow_idx in 0..out_w {
-        let h_start = oh_idx * sh;
-        let w_start = ow_idx * sw;
-        let window = input_arr.slice(s![n_idx, c_idx, h_start..h_start + kh, w_start..w_start + kw]);
-        let max_val = window.iter().fold(f32::NEG_INFINITY, |max, &val| max.max(val));
-        output_arr[[n_idx, c_idx, oh_idx, ow_idx]] = max_val;
-    }}}}
+    for n_idx in 0..n {
+        for c_idx in 0..c {
+            for oh_idx in 0..out_h {
+                for ow_idx in 0..out_w {
+                    let h_start = oh_idx * sh;
+                    let w_start = ow_idx * sw;
+                    let window = input_arr.slice(s![
+                        n_idx,
+                        c_idx,
+                        h_start..h_start + kh,
+                        w_start..w_start + kw
+                    ]);
+                    let max_val = window
+                        .iter()
+                        .fold(f32::NEG_INFINITY, |max, &val| max.max(val));
+                    output_arr[[n_idx, c_idx, oh_idx, ow_idx]] = max_val;
+                }
+            }
+        }
+    }
     Ok(Value::Tensor(output_arr.into_dyn()))
 }
 
-fn op_max_unpool2d(operand: Value, original_input: Value, kernel_size: (usize, usize), stride: (usize, usize)) -> Result<Value, RuntimeError> {
-    let grad_tensor = match operand { Value::Tensor(val) => val.into_dimensionality::<ndarray::Ix4>().map_err(|e| RuntimeError::ShapeError(e.to_string()))?, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }), };
-    let original_tensor = match original_input { Value::Tensor(val) => val.into_dimensionality::<ndarray::Ix4>().map_err(|e| RuntimeError::ShapeError(e.to_string()))?, _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }), };
+fn op_max_unpool2d(
+    operand: Value,
+    original_input: Value,
+    kernel_size: (usize, usize),
+    stride: (usize, usize),
+) -> Result<Value, RuntimeError> {
+    let grad_tensor = match operand {
+        Value::Tensor(val) => val
+            .into_dimensionality::<ndarray::Ix4>()
+            .map_err(|e| RuntimeError::ShapeError(e.to_string()))?,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
+    };
+    let original_tensor = match original_input {
+        Value::Tensor(val) => val
+            .into_dimensionality::<ndarray::Ix4>()
+            .map_err(|e| RuntimeError::ShapeError(e.to_string()))?,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
+    };
     let (_n, _c, h, w) = original_tensor.dim();
     let (kh, kw) = kernel_size;
     let (sh, sw) = stride;
     let mut output_arr = Array4::<f32>::zeros((_n, _c, h, w));
-    for n_idx in 0..grad_tensor.dim().0 { for c_idx in 0..grad_tensor.dim().1 { for oh_idx in 0..grad_tensor.dim().2 { for ow_idx in 0..grad_tensor.dim().3 {
-        let h_start = oh_idx * sh;
-        let w_start = ow_idx * sw;
-        let window = original_tensor.slice(s![n_idx, c_idx, h_start..h_start + kh, w_start..w_start + kw]);
-        let grad_val = grad_tensor[[n_idx, c_idx, oh_idx, ow_idx]];
-        let mut max_val = f32::NEG_INFINITY;
-        let mut max_pos = (0, 0);
-        for r in 0..kh { for col in 0..kw { if window[[r, col]] > max_val { max_val = window[[r, col]]; max_pos = (r, col); } } }
-        output_arr[[n_idx, c_idx, h_start + max_pos.0, w_start + max_pos.1]] += grad_val;
-    }}}}
+    for n_idx in 0..grad_tensor.dim().0 {
+        for c_idx in 0..grad_tensor.dim().1 {
+            for oh_idx in 0..grad_tensor.dim().2 {
+                for ow_idx in 0..grad_tensor.dim().3 {
+                    let h_start = oh_idx * sh;
+                    let w_start = ow_idx * sw;
+                    let window = original_tensor.slice(s![
+                        n_idx,
+                        c_idx,
+                        h_start..h_start + kh,
+                        w_start..w_start + kw
+                    ]);
+                    let grad_val = grad_tensor[[n_idx, c_idx, oh_idx, ow_idx]];
+                    let mut max_val = f32::NEG_INFINITY;
+                    let mut max_pos = (0, 0);
+                    for r in 0..kh {
+                        for col in 0..kw {
+                            if window[[r, col]] > max_val {
+                                max_val = window[[r, col]];
+                                max_pos = (r, col);
+                            }
+                        }
+                    }
+                    output_arr[[n_idx, c_idx, h_start + max_pos.0, w_start + max_pos.1]] +=
+                        grad_val;
+                }
+            }
+        }
+    }
     Ok(Value::Tensor(output_arr.into_dyn()))
 }
 
 fn op_reduce_sum_to(source: Value, target_shape_provider: Value) -> Result<Value, RuntimeError> {
     let mut source_tensor = match source {
         Value::Tensor(val) => val,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
     let target_shape = match target_shape_provider {
         Value::Tensor(val) => val.shape().to_vec(),
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".to_string(), actual: "Other".to_string() }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let source_rank = source_tensor.ndim();
@@ -561,21 +1051,27 @@ fn op_conv2d(
     groups: usize,
 ) -> Result<Value, RuntimeError> {
     let input_arr: Array4<f32> = match input {
-        Value::Tensor(val) => val.into_dimensionality()
+        Value::Tensor(val) => val
+            .into_dimensionality()
             .map_err(|e| RuntimeError::ShapeError(format!("Conv2d input: {}", e)))?,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let weight_arr: Array4<f32> = match weight {
-        Value::Tensor(val) => val.into_dimensionality()
+        Value::Tensor(val) => val
+            .into_dimensionality()
             .map_err(|e| RuntimeError::ShapeError(format!("Conv2d weight: {}", e)))?,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let (batch_size, in_channels, in_h, in_w) = input_arr.dim();
@@ -622,9 +1118,13 @@ fn op_conv2d(
                                     let ih = (oh * stride_h + kh * dil_h) as isize - pad_h as isize;
                                     let iw = (ow * stride_w + kw * dil_w) as isize - pad_w as isize;
 
-                                    if ih >= 0 && ih < in_h as isize && iw >= 0 && iw < in_w as isize {
+                                    if ih >= 0
+                                        && ih < in_h as isize
+                                        && iw >= 0
+                                        && iw < in_w as isize
+                                    {
                                         sum += input_arr[[n, in_ch, ih as usize, iw as usize]]
-                                             * weight_arr[[out_ch, ic, kh, kw]];
+                                            * weight_arr[[out_ch, ic, kh, kw]];
                                     }
                                 }
                             }
@@ -641,10 +1141,12 @@ fn op_conv2d(
     if let Some(bias_val) = bias {
         let bias_arr = match bias_val {
             Value::Tensor(val) => val,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "Tensor".to_string(),
-                actual: "Other".to_string()
-            }),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "Tensor".to_string(),
+                    actual: "Other".to_string(),
+                })
+            }
         };
 
         for n in 0..batch_size {
@@ -674,25 +1176,31 @@ fn op_conv_transpose2d(
     groups: usize,
 ) -> Result<Value, RuntimeError> {
     let input_arr: Array4<f32> = match input {
-        Value::Tensor(val) => val.into_dimensionality()
+        Value::Tensor(val) => val
+            .into_dimensionality()
             .map_err(|e| RuntimeError::ShapeError(format!("ConvTranspose2d input: {}", e)))?,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let weight_arr: Array4<f32> = match weight {
-        Value::Tensor(val) => val.into_dimensionality()
+        Value::Tensor(val) => val
+            .into_dimensionality()
             .map_err(|e| RuntimeError::ShapeError(format!("ConvTranspose2d weight: {}", e)))?,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let (batch_size, in_channels, in_h, in_w) = input_arr.dim();
-    let (weight_out_channels, out_channels_per_group, kernel_h, kernel_w) = weight_arr.dim();
+    let (_weight_out_channels, out_channels_per_group, kernel_h, kernel_w) = weight_arr.dim();
 
     let (stride_h, stride_w) = stride;
     let (pad_h, pad_w) = padding;
@@ -731,8 +1239,13 @@ fn op_conv_transpose2d(
                                         let out_oh = oh - pad_h;
                                         let out_ow = ow - pad_w;
                                         if out_oh < out_h && out_ow < out_w {
-                                            output[[n, oc, out_oh, out_ow]] +=
-                                                in_val * weight_arr[[ic_rel + g * in_channels_per_group, oc_rel, kh, kw]];
+                                            output[[n, oc, out_oh, out_ow]] += in_val
+                                                * weight_arr[[
+                                                    ic_rel + g * in_channels_per_group,
+                                                    oc_rel,
+                                                    kh,
+                                                    kw,
+                                                ]];
                                         }
                                     }
                                 }
@@ -748,10 +1261,12 @@ fn op_conv_transpose2d(
     if let Some(bias_val) = bias {
         let bias_arr = match bias_val {
             Value::Tensor(val) => val,
-            _ => return Err(RuntimeError::TypeError {
-                expected: "Tensor".to_string(),
-                actual: "Other".to_string()
-            }),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "Tensor".to_string(),
+                    actual: "Other".to_string(),
+                })
+            }
         };
 
         for n in 0..batch_size {
@@ -777,12 +1292,15 @@ fn op_avg_pool2d(
     padding: (usize, usize),
 ) -> Result<Value, RuntimeError> {
     let input_arr: Array4<f32> = match operand {
-        Value::Tensor(val) => val.into_dimensionality()
+        Value::Tensor(val) => val
+            .into_dimensionality()
             .map_err(|e| RuntimeError::ShapeError(e.to_string()))?,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let (n, c, h, w) = input_arr.dim();
@@ -794,7 +1312,6 @@ fn op_avg_pool2d(
     let out_w = (w + 2 * pad_w - kw) / sw + 1;
 
     let mut output = Array4::<f32>::zeros((n, c, out_h, out_w));
-    let kernel_area = (kh * kw) as f32;
 
     for n_idx in 0..n {
         for c_idx in 0..c {
@@ -816,11 +1333,8 @@ fn op_avg_pool2d(
                     }
 
                     // Use actual count for edge cases with padding
-                    output[[n_idx, c_idx, oh, ow]] = if count > 0 {
-                        sum / count as f32
-                    } else {
-                        0.0
-                    };
+                    output[[n_idx, c_idx, oh, ow]] =
+                        if count > 0 { sum / count as f32 } else { 0.0 };
                 }
             }
         }
@@ -836,12 +1350,15 @@ fn op_adaptive_avg_pool2d(
     output_size: (usize, usize),
 ) -> Result<Value, RuntimeError> {
     let input_arr: Array4<f32> = match operand {
-        Value::Tensor(val) => val.into_dimensionality()
+        Value::Tensor(val) => val
+            .into_dimensionality()
             .map_err(|e| RuntimeError::ShapeError(e.to_string()))?,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let (n, c, in_h, in_w) = input_arr.dim();
@@ -883,24 +1400,29 @@ fn op_adaptive_avg_pool2d(
 fn op_embedding(indices: Value, weight: Value) -> Result<Value, RuntimeError> {
     let indices_arr = match indices {
         Value::Tensor(val) => val,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let weight_arr = match weight {
         Value::Tensor(val) => val,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     // Weight must be 2D: [num_embeddings, embedding_dim]
     if weight_arr.ndim() != 2 {
         return Err(RuntimeError::ShapeError(format!(
-            "Embedding weight must be 2D, got {}D", weight_arr.ndim()
+            "Embedding weight must be 2D, got {}D",
+            weight_arr.ndim()
         )));
     }
 
@@ -921,7 +1443,8 @@ fn op_embedding(indices: Value, weight: Value) -> Result<Value, RuntimeError> {
         let idx = idx_f32 as usize;
         if idx >= num_embeddings {
             return Err(RuntimeError::ShapeError(format!(
-                "Embedding index {} out of bounds for num_embeddings {}", idx, num_embeddings
+                "Embedding index {} out of bounds for num_embeddings {}",
+                idx, num_embeddings
             )));
         }
 
@@ -931,10 +1454,8 @@ fn op_embedding(indices: Value, weight: Value) -> Result<Value, RuntimeError> {
         }
     }
 
-    let output = ndarray::ArrayD::from_shape_vec(
-        ndarray::IxDyn(&output_shape),
-        output_data
-    ).map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+    let output = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&output_shape), output_data)
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
 
     Ok(Value::Tensor(output))
 }
@@ -949,25 +1470,31 @@ fn op_avg_unpool2d(
     padding: (usize, usize),
 ) -> Result<Value, RuntimeError> {
     let grad_arr: Array4<f32> = match grad {
-        Value::Tensor(val) => val.into_dimensionality()
+        Value::Tensor(val) => val
+            .into_dimensionality()
             .map_err(|e| RuntimeError::ShapeError(e.to_string()))?,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let orig_arr: Array4<f32> = match original_input {
-        Value::Tensor(val) => val.into_dimensionality()
+        Value::Tensor(val) => val
+            .into_dimensionality()
             .map_err(|e| RuntimeError::ShapeError(e.to_string()))?,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let (n, c, in_h, in_w) = orig_arr.dim();
-    let (grad_n, grad_c, out_h, out_w) = grad_arr.dim();
+    let (_grad_n, _grad_c, out_h, out_w) = grad_arr.dim();
     let (kh, kw) = kernel_size;
     let (sh, sw) = stride;
     let (ph, pw) = padding;
@@ -995,7 +1522,8 @@ fn op_avg_unpool2d(
                                 let actual_ih = ih - ph;
                                 let actual_iw = iw - pw;
                                 if actual_ih < in_h && actual_iw < in_w {
-                                    output[[n_idx, c_idx, actual_ih, actual_iw]] += distributed_grad;
+                                    output[[n_idx, c_idx, actual_ih, actual_iw]] +=
+                                        distributed_grad;
                                 }
                             }
                         }
@@ -1019,18 +1547,22 @@ fn op_embedding_grad(
 ) -> Result<Value, RuntimeError> {
     let grad_arr = match grad_output {
         Value::Tensor(val) => val,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let indices_arr = match indices {
         Value::Tensor(val) => val,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     // grad_output shape: [*, embedding_dim]
@@ -1049,7 +1581,8 @@ fn op_embedding_grad(
         let idx = indices_arr.as_slice().unwrap()[i] as usize;
         if idx >= num_embeddings {
             return Err(RuntimeError::ShapeError(format!(
-                "EmbeddingGrad: index {} out of bounds for num_embeddings {}", idx, num_embeddings
+                "EmbeddingGrad: index {} out of bounds for num_embeddings {}",
+                idx, num_embeddings
             )));
         }
 
@@ -1077,21 +1610,27 @@ fn op_conv2d_backward_input(
     groups: usize,
 ) -> Result<Value, RuntimeError> {
     let grad_arr: Array4<f32> = match grad_output {
-        Value::Tensor(val) => val.into_dimensionality()
+        Value::Tensor(val) => val
+            .into_dimensionality()
             .map_err(|e| RuntimeError::ShapeError(format!("Conv2dBackwardInput grad: {}", e)))?,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let weight_arr: Array4<f32> = match weight {
-        Value::Tensor(val) => val.into_dimensionality()
+        Value::Tensor(val) => val
+            .into_dimensionality()
             .map_err(|e| RuntimeError::ShapeError(format!("Conv2dBackwardInput weight: {}", e)))?,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let (batch_size, out_channels, out_h, out_w) = grad_arr.dim();
@@ -1161,21 +1700,27 @@ fn op_conv2d_backward_weight(
     groups: usize,
 ) -> Result<Value, RuntimeError> {
     let grad_arr: Array4<f32> = match grad_output {
-        Value::Tensor(val) => val.into_dimensionality()
+        Value::Tensor(val) => val
+            .into_dimensionality()
             .map_err(|e| RuntimeError::ShapeError(format!("Conv2dBackwardWeight grad: {}", e)))?,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let input_arr: Array4<f32> = match input {
-        Value::Tensor(val) => val.into_dimensionality()
+        Value::Tensor(val) => val
+            .into_dimensionality()
             .map_err(|e| RuntimeError::ShapeError(format!("Conv2dBackwardWeight input: {}", e)))?,
-        _ => return Err(RuntimeError::TypeError {
-            expected: "Tensor".to_string(),
-            actual: "Other".to_string()
-        }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".to_string(),
+                actual: "Other".to_string(),
+            })
+        }
     };
 
     let (batch_size, _, out_h, out_w) = grad_arr.dim();
@@ -1232,23 +1777,33 @@ fn op_conv2d_backward_weight(
 
 /// Layer Normalization: y = gamma * (x - mean) / sqrt(var + eps) + beta
 /// Normalization happens along the last axis.
-fn op_layer_norm(
-    input: Value,
-    gamma: Value,
-    beta: Value,
-    eps: f32,
-) -> Result<Value, RuntimeError> {
+fn op_layer_norm(input: Value, gamma: Value, beta: Value, eps: f32) -> Result<Value, RuntimeError> {
     let x = match input {
         Value::Tensor(t) => t,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNorm input".into() }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "LayerNorm input".into(),
+            })
+        }
     };
     let gamma_arr = match gamma {
         Value::Tensor(t) => t,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNorm gamma".into() }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "LayerNorm gamma".into(),
+            })
+        }
     };
     let beta_arr = match beta {
         Value::Tensor(t) => t,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNorm beta".into() }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "LayerNorm beta".into(),
+            })
+        }
     };
 
     let shape = x.shape();
@@ -1257,35 +1812,36 @@ fn op_layer_norm(
     let batch_size: usize = shape.iter().take(ndim - 1).product();
 
     // Reshape to [batch, norm_size]
-    let x_2d = x.clone().into_shape_with_order((batch_size, norm_size))
+    let x_2d = x
+        .clone()
+        .into_shape_with_order((batch_size, norm_size))
         .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
 
     let mut output = ndarray::ArrayD::<f32>::zeros(shape.to_vec());
-    let mut out_2d = output.view_mut().into_shape_with_order((batch_size, norm_size))
+    let mut out_2d = output
+        .view_mut()
+        .into_shape_with_order((batch_size, norm_size))
         .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
 
     // Flatten gamma and beta
     let gamma_flat: Vec<f32> = gamma_arr.iter().copied().collect();
     let beta_flat: Vec<f32> = beta_arr.iter().copied().collect();
 
-    for (_i, (x_row, mut out_row)) in x_2d.rows().into_iter()
-        .zip(out_2d.rows_mut())
-        .enumerate()
-    {
+    for (x_row, mut out_row) in x_2d.rows().into_iter().zip(out_2d.rows_mut()) {
         // Compute mean
         let mean: f32 = x_row.iter().sum::<f32>() / norm_size as f32;
 
         // Compute variance
-        let var: f32 = x_row.iter()
-            .map(|&v| (v - mean) * (v - mean))
-            .sum::<f32>() / norm_size as f32;
+        let var: f32 =
+            x_row.iter().map(|&v| (v - mean) * (v - mean)).sum::<f32>() / norm_size as f32;
 
         let std = (var + eps).sqrt();
 
         // Normalize and scale
         for (j, (&x_val, out_val)) in x_row.iter().zip(out_row.iter_mut()).enumerate() {
             let normalized = (x_val - mean) / std;
-            *out_val = normalized * gamma_flat[j % gamma_flat.len()] + beta_flat[j % beta_flat.len()];
+            *out_val =
+                normalized * gamma_flat[j % gamma_flat.len()] + beta_flat[j % beta_flat.len()];
         }
     }
 
@@ -1310,54 +1866,74 @@ fn op_layer_norm_backward(
 ) -> Result<Value, RuntimeError> {
     let dy = match grad_output {
         Value::Tensor(t) => t,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNormBackward grad_output".into() }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "LayerNormBackward grad_output".into(),
+            })
+        }
     };
     let x = match input {
         Value::Tensor(t) => t,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNormBackward input".into() }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "LayerNormBackward input".into(),
+            })
+        }
     };
     let gamma_arr = match gamma {
         Value::Tensor(t) => t,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNormBackward gamma".into() }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "LayerNormBackward gamma".into(),
+            })
+        }
     };
 
     let shape = x.shape();
     let ndim = shape.len();
-    let n = shape[ndim - 1] as f32;  // normalization size
+    let n = shape[ndim - 1] as f32; // normalization size
     let batch_size: usize = shape.iter().take(ndim - 1).product();
 
     // Reshape to [batch, norm_size]
     let norm_size = shape[ndim - 1];
-    let x_2d = x.clone().into_shape_with_order((batch_size, norm_size))
+    let x_2d = x
+        .clone()
+        .into_shape_with_order((batch_size, norm_size))
         .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
-    let dy_2d = dy.clone().into_shape_with_order((batch_size, norm_size))
+    let dy_2d = dy
+        .clone()
+        .into_shape_with_order((batch_size, norm_size))
         .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
 
     let mut dx = ndarray::ArrayD::<f32>::zeros(shape.to_vec());
-    let mut dx_2d = dx.view_mut().into_shape_with_order((batch_size, norm_size))
+    let mut dx_2d = dx
+        .view_mut()
+        .into_shape_with_order((batch_size, norm_size))
         .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
 
     // Flatten gamma
     let gamma_flat: Vec<f32> = gamma_arr.iter().copied().collect();
 
-    for (x_row, (dy_row, mut dx_row)) in x_2d.rows().into_iter()
+    for (x_row, (dy_row, mut dx_row)) in x_2d
+        .rows()
+        .into_iter()
         .zip(dy_2d.rows().into_iter().zip(dx_2d.rows_mut()))
     {
         // Compute mean and std of x
         let mean: f32 = x_row.iter().sum::<f32>() / n;
-        let var: f32 = x_row.iter()
-            .map(|&v| (v - mean) * (v - mean))
-            .sum::<f32>() / n;
+        let var: f32 = x_row.iter().map(|&v| (v - mean) * (v - mean)).sum::<f32>() / n;
         let std = (var + eps).sqrt();
         let inv_std = 1.0 / std;
 
         // Compute x_norm = (x - mean) / std
-        let x_norm: Vec<f32> = x_row.iter()
-            .map(|&v| (v - mean) * inv_std)
-            .collect();
+        let x_norm: Vec<f32> = x_row.iter().map(|&v| (v - mean) * inv_std).collect();
 
         // Compute dy * gamma
-        let dy_gamma: Vec<f32> = dy_row.iter()
+        let dy_gamma: Vec<f32> = dy_row
+            .iter()
             .enumerate()
             .map(|(j, &dy_val)| dy_val * gamma_flat[j % gamma_flat.len()])
             .collect();
@@ -1366,10 +1942,12 @@ fn op_layer_norm_backward(
         let mean_dy_gamma: f32 = dy_gamma.iter().sum::<f32>() / n;
 
         // Compute mean(dy * gamma * x_norm)
-        let mean_dy_gamma_xnorm: f32 = dy_gamma.iter()
+        let mean_dy_gamma_xnorm: f32 = dy_gamma
+            .iter()
             .zip(x_norm.iter())
             .map(|(&dg, &xn)| dg * xn)
-            .sum::<f32>() / n;
+            .sum::<f32>()
+            / n;
 
         // dx = inv_std * (dy_gamma - mean_dy_gamma - x_norm * mean_dy_gamma_xnorm)
         for (j, dx_val) in dx_row.iter_mut().enumerate() {
@@ -1390,11 +1968,21 @@ fn op_layer_norm_grad_gamma(
 ) -> Result<Value, RuntimeError> {
     let dy = match grad_output {
         Value::Tensor(t) => t,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNormGradGamma grad_output".into() }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "LayerNormGradGamma grad_output".into(),
+            })
+        }
     };
     let x = match input {
         Value::Tensor(t) => t,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNormGradGamma input".into() }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "LayerNormGradGamma input".into(),
+            })
+        }
     };
 
     let shape = x.shape();
@@ -1403,9 +1991,13 @@ fn op_layer_norm_grad_gamma(
     let batch_size: usize = shape.iter().take(ndim - 1).product();
 
     // Reshape to [batch, norm_size]
-    let x_2d = x.clone().into_shape_with_order((batch_size, norm_size))
+    let x_2d = x
+        .clone()
+        .into_shape_with_order((batch_size, norm_size))
         .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
-    let dy_2d = dy.clone().into_shape_with_order((batch_size, norm_size))
+    let dy_2d = dy
+        .clone()
+        .into_shape_with_order((batch_size, norm_size))
         .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
 
     // grad_gamma has shape [1, norm_size]
@@ -1415,9 +2007,7 @@ fn op_layer_norm_grad_gamma(
         // Compute mean and std of x
         let n = norm_size as f32;
         let mean: f32 = x_row.iter().sum::<f32>() / n;
-        let var: f32 = x_row.iter()
-            .map(|&v| (v - mean) * (v - mean))
-            .sum::<f32>() / n;
+        let var: f32 = x_row.iter().map(|&v| (v - mean) * (v - mean)).sum::<f32>() / n;
         let std = (var + eps).sqrt();
 
         // x_normalized = (x - mean) / std
@@ -1429,10 +2019,8 @@ fn op_layer_norm_grad_gamma(
     }
 
     // Output shape: [1, norm_size]
-    let output = ndarray::ArrayD::from_shape_vec(
-        ndarray::IxDyn(&[1, norm_size]),
-        grad_gamma
-    ).map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+    let output = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[1, norm_size]), grad_gamma)
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
 
     Ok(Value::Tensor(output))
 }
@@ -1440,12 +2028,15 @@ fn op_layer_norm_grad_gamma(
 /// LayerNorm gradient with respect to beta parameter.
 /// grad_beta = sum(grad_output, axis=batch)
 /// Output has shape [1, norm_size] (same as beta).
-fn op_layer_norm_grad_beta(
-    grad_output: Value,
-) -> Result<Value, RuntimeError> {
+fn op_layer_norm_grad_beta(grad_output: Value) -> Result<Value, RuntimeError> {
     let dy = match grad_output {
         Value::Tensor(t) => t,
-        _ => return Err(RuntimeError::TypeError { expected: "Tensor".into(), actual: "LayerNormGradBeta grad_output".into() }),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "LayerNormGradBeta grad_output".into(),
+            })
+        }
     };
 
     let shape = dy.shape();
@@ -1454,7 +2045,9 @@ fn op_layer_norm_grad_beta(
     let batch_size: usize = shape.iter().take(ndim - 1).product();
 
     // Reshape to [batch, norm_size]
-    let dy_2d = dy.clone().into_shape_with_order((batch_size, norm_size))
+    let dy_2d = dy
+        .clone()
+        .into_shape_with_order((batch_size, norm_size))
         .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
 
     // grad_beta has shape [1, norm_size]
@@ -1467,10 +2060,108 @@ fn op_layer_norm_grad_beta(
     }
 
     // Output shape: [1, norm_size]
-    let output = ndarray::ArrayD::from_shape_vec(
-        ndarray::IxDyn(&[1, norm_size]),
-        grad_beta
-    ).map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+    let output = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[1, norm_size]), grad_beta)
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
 
     Ok(Value::Tensor(output))
+}
+
+/// Slices a tensor along `axis` from `start` (inclusive) to `end` (exclusive).
+fn op_slice(input: Value, axis: usize, start: usize, end: usize) -> Result<Value, RuntimeError> {
+    let arr = match input {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+    if axis >= arr.ndim() {
+        return Err(RuntimeError::ShapeError(format!(
+            "Slice axis {} out of bounds for tensor of rank {}",
+            axis,
+            arr.ndim()
+        )));
+    }
+    if end > arr.shape()[axis] || start > end {
+        return Err(RuntimeError::ShapeError(format!(
+            "Slice range {}..{} invalid for axis {} with size {}",
+            start,
+            end,
+            axis,
+            arr.shape()[axis]
+        )));
+    }
+    let sliced = arr
+        .slice_axis(ndarray::Axis(axis), ndarray::Slice::from(start..end))
+        .to_owned();
+    Ok(Value::Tensor(sliced))
+}
+
+/// Backward of `Slice`: places `grad` at positions `start..start+grad.shape[axis]`
+/// inside a zero tensor of shape `grad.shape` (with axis resized to `full_size`).
+fn op_slice_backward(
+    grad: Value,
+    axis: usize,
+    start: usize,
+    full_size: usize,
+) -> Result<Value, RuntimeError> {
+    let grad_arr = match grad {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+    if axis >= grad_arr.ndim() {
+        return Err(RuntimeError::ShapeError(format!(
+            "SliceBackward axis {} out of bounds for rank {}",
+            axis,
+            grad_arr.ndim()
+        )));
+    }
+    let slice_len = grad_arr.shape()[axis];
+    if start + slice_len > full_size {
+        return Err(RuntimeError::ShapeError(format!(
+            "SliceBackward: start {} + slice_len {} > full_size {}",
+            start, slice_len, full_size
+        )));
+    }
+    let mut out_shape = grad_arr.shape().to_vec();
+    out_shape[axis] = full_size;
+    let mut out = ndarray::ArrayD::<f32>::zeros(out_shape);
+    out.slice_axis_mut(
+        ndarray::Axis(axis),
+        ndarray::Slice::from(start..start + slice_len),
+    )
+    .assign(&grad_arr);
+    Ok(Value::Tensor(out))
+}
+
+/// Concatenates `inputs` along `axis`. All inputs must share every dimension except `axis`.
+fn op_concat(inputs: Vec<Value>, axis: usize) -> Result<Value, RuntimeError> {
+    if inputs.is_empty() {
+        return Err(RuntimeError::ShapeError(
+            "Concat requires at least one input".into(),
+        ));
+    }
+    let mut arrays = Vec::with_capacity(inputs.len());
+    for val in inputs {
+        match val {
+            Value::Tensor(t) => arrays.push(t),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "Tensor".into(),
+                    actual: "non-tensor".into(),
+                })
+            }
+        }
+    }
+    let views: Vec<_> = arrays.iter().map(|a| a.view()).collect();
+    let concatenated = ndarray::concatenate(ndarray::Axis(axis), &views)
+        .map_err(|e| RuntimeError::ShapeError(format!("Concat failed: {}", e)))?;
+    Ok(Value::Tensor(concatenated))
 }

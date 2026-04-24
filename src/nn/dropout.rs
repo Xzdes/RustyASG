@@ -1,38 +1,38 @@
-//! Dropout слой для регуляризации.
+//! Dropout layer for regularization.
 //!
-//! Реализует стандартный Dropout, который случайно обнуляет
-//! элементы тензора во время обучения для предотвращения переобучения.
+//! Implements the standard Dropout, which randomly zeroes elements of
+//! the tensor during training to prevent overfitting.
 
 use crate::nn::Module;
 use crate::tensor::Tensor;
 
-/// Слой Dropout для регуляризации.
+/// Dropout layer for regularization.
 ///
-/// Во время обучения случайно обнуляет элементы с вероятностью `p`,
-/// масштабируя остальные на 1/(1-p) для сохранения математического ожидания.
+/// During training, zeroes elements with probability `p` and scales the
+/// remaining elements by `1 / (1 - p)` to preserve expected value.
 ///
-/// Во время inference (eval mode) просто пропускает вход без изменений.
+/// During inference (eval mode), simply passes the input through unchanged.
 ///
-/// # Пример
+/// # Example
 /// ```ignore
-/// let dropout = Dropout::new(0.5); // 50% вероятность обнуления
-/// dropout.eval(); // Отключить dropout для inference
+/// let dropout = Dropout::new(0.5); // 50% drop probability
+/// dropout.eval(); // Disable dropout for inference
 /// ```
 pub struct Dropout {
-    /// Вероятность обнуления (0.0 - 1.0)
+    /// Drop probability (0.0 - 1.0).
     pub p: f32,
-    /// Флаг режима обучения
+    /// Training-mode flag.
     pub training: bool,
 }
 
 impl Dropout {
-    /// Создаёт новый слой Dropout.
+    /// Creates a new Dropout layer.
     ///
-    /// # Аргументы
-    /// * `p` - Вероятность обнуления элемента (рекомендуется 0.1-0.5)
+    /// # Arguments
+    /// * `p` - Probability of zeroing an element (0.1-0.5 is recommended).
     ///
     /// # Panics
-    /// Паникует если `p` не в диапазоне [0, 1)
+    /// Panics if `p` is not in `[0, 1)`.
     pub fn new(p: f32) -> Self {
         assert!(
             (0.0..1.0).contains(&p),
@@ -42,17 +42,17 @@ impl Dropout {
         Self { p, training: true }
     }
 
-    /// Устанавливает режим обучения.
+    /// Switches to training mode.
     pub fn train(&mut self) {
         self.training = true;
     }
 
-    /// Устанавливает режим inference.
+    /// Switches to inference mode.
     pub fn eval(&mut self) {
         self.training = false;
     }
 
-    /// Проверяет, включен ли dropout.
+    /// Returns whether dropout is active.
     pub fn is_training(&self) -> bool {
         self.training
     }
@@ -65,41 +65,42 @@ impl Default for Dropout {
 }
 
 impl Module for Dropout {
-    /// Прямой проход Dropout.
+    /// Forward pass of Dropout.
     ///
-    /// **Примечание**: В текущей графовой архитектуре Dropout не применяется
-    /// на этапе построения графа, так как случайность должна быть привнесена
-    /// во время выполнения. Этот метод просто возвращает вход без изменений.
+    /// **Note**: in the current graph-based architecture Dropout is not
+    /// applied at graph-construction time, since randomness must be
+    /// introduced at execution time. This method simply returns the input
+    /// unchanged.
     ///
-    /// Для полной поддержки Dropout необходимо:
-    /// 1. Добавить NodeType::Dropout в ASG
-    /// 2. Реализовать генерацию маски в runtime
-    /// 3. Передавать флаг training в backend
+    /// Full Dropout support requires:
+    /// 1. Adding `NodeType::Dropout` to the ASG.
+    /// 2. Implementing mask generation in the runtime.
+    /// 3. Passing the `training` flag to the backend.
     fn forward(&self, x: &Tensor) -> Tensor {
-        // TODO: Реализовать через специальный узел Dropout в ASG
-        // Пока что просто возвращаем вход
+        // TODO: Implement via a dedicated Dropout node in the ASG.
+        // For now, simply return the input unchanged.
         x.clone()
     }
 
     fn parameters(&self) -> Vec<Tensor> {
-        // Dropout не имеет обучаемых параметров
+        // Dropout has no trainable parameters.
         Vec::new()
     }
 }
 
-/// Spatial Dropout для сверточных сетей.
+/// Spatial Dropout for convolutional networks.
 ///
-/// В отличие от стандартного Dropout, обнуляет целые каналы (feature maps),
-/// что более эффективно для сверточных архитектур.
+/// Unlike standard Dropout, zeroes entire channels (feature maps), which
+/// is more effective for convolutional architectures.
 pub struct SpatialDropout {
-    /// Вероятность обнуления канала
+    /// Per-channel drop probability.
     pub p: f32,
-    /// Флаг режима обучения
+    /// Training-mode flag.
     pub training: bool,
 }
 
 impl SpatialDropout {
-    /// Создаёт новый слой SpatialDropout.
+    /// Creates a new SpatialDropout layer.
     pub fn new(p: f32) -> Self {
         assert!(
             (0.0..1.0).contains(&p),
@@ -120,7 +121,7 @@ impl SpatialDropout {
 
 impl Module for SpatialDropout {
     fn forward(&self, x: &Tensor) -> Tensor {
-        // TODO: Реализовать через специальный узел
+        // TODO: Implement via a dedicated node.
         x.clone()
     }
 

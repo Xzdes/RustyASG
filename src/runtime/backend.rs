@@ -54,7 +54,9 @@ pub enum RuntimeError {
     #[error("Graph with ID {0} not found in execution context. Ensure the graph was registered before execution.")]
     GraphNotFound(AsgId),
 
-    #[error("Type mismatch: operation expected {expected}, but got {actual}. Check input data types.")]
+    #[error(
+        "Type mismatch: operation expected {expected}, but got {actual}. Check input data types."
+    )]
     TypeError { expected: String, actual: String },
 
     #[error("Tensor shape error: {0}. Check input tensor dimensions.")]

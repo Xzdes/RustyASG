@@ -1,55 +1,55 @@
-// --- Файл: src/serialization/safetensors_io.rs ---
+// --- File: src/serialization/safetensors_io.rs ---
 
-//! Модуль для работы с форматом SafeTensors.
+//! Module for working with the SafeTensors format.
 //!
-//! SafeTensors - это безопасный и эффективный формат для хранения тензоров,
-//! разработанный HuggingFace. Он обеспечивает:
-//! - Быструю загрузку через memory-mapping
-//! - Защиту от arbitrary code execution
-//! - Поддержку различных типов данных
+//! SafeTensors is a safe and efficient tensor storage format developed by
+//! HuggingFace. It provides:
+//! - Fast loading via memory-mapping
+//! - Protection from arbitrary code execution
+//! - Support for multiple data types
 
 use crate::asg::Value;
 use ndarray::ArrayD;
-use safetensors::tensor::{SafeTensors, TensorView};
 use safetensors::serialize_to_file;
+use safetensors::tensor::{SafeTensors, TensorView};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use thiserror::Error;
 
-/// Ошибки при работе с SafeTensors
+/// Errors that may occur while working with SafeTensors.
 #[derive(Error, Debug)]
 pub enum SafeTensorsError {
-    #[error("Ошибка ввода/вывода: {0}")]
+    #[error("I/O error: {0}")]
     IoError(#[from] std::io::Error),
 
-    #[error("Ошибка SafeTensors: {0}")]
+    #[error("SafeTensors error: {0}")]
     SafeTensorsError(#[from] safetensors::SafeTensorError),
 
-    #[error("Неподдерживаемый тип данных: {0}")]
+    #[error("Unsupported data type: {0}")]
     UnsupportedDtype(String),
 
-    #[error("Ошибка формы тензора: ожидалось {expected:?}, получено {actual:?}")]
+    #[error("Tensor shape mismatch: expected {expected:?}, got {actual:?}")]
     ShapeMismatch {
         expected: Vec<usize>,
         actual: Vec<usize>,
     },
 
-    #[error("Тензор '{0}' не найден")]
+    #[error("Tensor '{0}' not found")]
     TensorNotFound(String),
 }
 
 type Result<T> = std::result::Result<T, SafeTensorsError>;
 
-/// Сохраняет HashMap с Value::Tensor в файл SafeTensors.
+/// Saves a HashMap of `Value::Tensor` entries to a SafeTensors file.
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `path` - Путь к файлу для сохранения
-/// * `tensors` - HashMap с именами тензоров и их значениями
+/// * `path` - Destination file path.
+/// * `tensors` - HashMap of tensor names and their values.
 ///
-/// # Пример
+/// # Example
 ///
 /// ```rust,ignore
 /// use std::collections::HashMap;
@@ -64,57 +64,47 @@ type Result<T> = std::result::Result<T, SafeTensorsError>;
 /// );
 /// save_safetensors("weights.safetensors", &weights)?;
 /// ```
-pub fn save_safetensors<P: AsRef<Path>>(
-    path: P,
-    tensors: &HashMap<String, Value>,
-) -> Result<()> {
+pub fn save_safetensors<P: AsRef<Path>>(path: P, tensors: &HashMap<String, Value>) -> Result<()> {
     let mut tensor_views: Vec<(&str, TensorView<'_>)> = Vec::new();
     let mut data_storage: HashMap<String, Vec<u8>> = HashMap::new();
 
-    // Сначала конвертируем все данные в байты и сохраняем
+    // First convert all data to bytes and store it.
     for (name, value) in tensors {
         if let Value::Tensor(arr) = value {
-            let data: Vec<u8> = arr
-                .iter()
-                .flat_map(|&x| x.to_le_bytes())
-                .collect();
+            let data: Vec<u8> = arr.iter().flat_map(|&x| x.to_le_bytes()).collect();
             data_storage.insert(name.clone(), data);
         }
     }
 
-    // Теперь создаем TensorView ссылающиеся на data_storage
+    // Then create TensorView values that reference data_storage.
     for (name, value) in tensors {
         if let Value::Tensor(arr) = value {
             let shape: Vec<usize> = arr.shape().to_vec();
             let data = data_storage.get(name).unwrap();
             tensor_views.push((
                 name.as_str(),
-                TensorView::new(
-                    safetensors::Dtype::F32,
-                    shape,
-                    data,
-                )?,
+                TensorView::new(safetensors::Dtype::F32, shape, data)?,
             ));
         }
     }
 
-    // Сериализуем в файл
+    // Serialize to file.
     serialize_to_file(tensor_views, &None, path.as_ref())?;
 
     Ok(())
 }
 
-/// Загружает тензоры из файла SafeTensors.
+/// Loads tensors from a SafeTensors file.
 ///
-/// # Аргументы
+/// # Arguments
 ///
-/// * `path` - Путь к файлу SafeTensors
+/// * `path` - Path to the SafeTensors file.
 ///
-/// # Возвращает
+/// # Returns
 ///
-/// HashMap с именами тензоров и их значениями
+/// A HashMap of tensor names and their values.
 ///
-/// # Пример
+/// # Example
 ///
 /// ```rust,ignore
 /// use rustyasg::serialization::load_safetensors;
@@ -125,24 +115,24 @@ pub fn save_safetensors<P: AsRef<Path>>(
 /// }
 /// ```
 pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<HashMap<String, Value>> {
-    // Читаем файл в память
+    // Read the file into memory.
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
-    // Парсим SafeTensors
+    // Parse SafeTensors.
     let tensors = SafeTensors::deserialize(&buffer)?;
 
     let mut result = HashMap::new();
 
     for (name, tensor) in tensors.tensors() {
-        // Проверяем тип данных
+        // Check the data type.
         match tensor.dtype() {
             safetensors::Dtype::F32 => {
                 let shape: Vec<usize> = tensor.shape().to_vec();
                 let data = tensor.data();
 
-                // Конвертируем байты обратно в f32
+                // Convert bytes back to f32.
                 let floats: Vec<f32> = data
                     .chunks_exact(4)
                     .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
@@ -150,12 +140,13 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<HashMap<String, Value
 
                 let floats_len = floats.len();
 
-                // Создаем ArrayD
-                let arr = ArrayD::from_shape_vec(ndarray::IxDyn(&shape), floats)
-                    .map_err(|_| SafeTensorsError::ShapeMismatch {
+                // Create the ArrayD.
+                let arr = ArrayD::from_shape_vec(ndarray::IxDyn(&shape), floats).map_err(|_| {
+                    SafeTensorsError::ShapeMismatch {
                         expected: shape.clone(),
                         actual: vec![floats_len],
-                    })?;
+                    }
+                })?;
 
                 result.insert(name.to_string(), Value::Tensor(arr));
             }
@@ -163,13 +154,13 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<HashMap<String, Value
                 let shape: Vec<usize> = tensor.shape().to_vec();
                 let data = tensor.data();
 
-                // Конвертируем f64 в f32
+                // Convert f64 to f32.
                 let floats: Vec<f32> = data
                     .chunks_exact(8)
                     .map(|chunk| {
                         let val = f64::from_le_bytes([
-                            chunk[0], chunk[1], chunk[2], chunk[3],
-                            chunk[4], chunk[5], chunk[6], chunk[7],
+                            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
+                            chunk[7],
                         ]);
                         val as f32
                     })
@@ -177,20 +168,22 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<HashMap<String, Value
 
                 let floats_len = floats.len();
 
-                let arr = ArrayD::from_shape_vec(ndarray::IxDyn(&shape), floats)
-                    .map_err(|_| SafeTensorsError::ShapeMismatch {
+                let arr = ArrayD::from_shape_vec(ndarray::IxDyn(&shape), floats).map_err(|_| {
+                    SafeTensorsError::ShapeMismatch {
                         expected: shape.clone(),
                         actual: vec![floats_len],
-                    })?;
+                    }
+                })?;
 
                 result.insert(name.to_string(), Value::Tensor(arr));
             }
             safetensors::Dtype::F16 | safetensors::Dtype::BF16 => {
-                // Для F16/BF16 нужна дополнительная обработка
-                // Пока просто выдаем ошибку
-                return Err(SafeTensorsError::UnsupportedDtype(
-                    format!("{:?}", tensor.dtype()),
-                ));
+                // F16/BF16 requires additional handling.
+                // For now we just return an error.
+                return Err(SafeTensorsError::UnsupportedDtype(format!(
+                    "{:?}",
+                    tensor.dtype()
+                )));
             }
             other => {
                 return Err(SafeTensorsError::UnsupportedDtype(format!("{:?}", other)));
@@ -201,7 +194,7 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<HashMap<String, Value
     Ok(result)
 }
 
-/// Загружает конкретный тензор по имени из файла SafeTensors.
+/// Loads a specific tensor by name from a SafeTensors file.
 pub fn load_tensor<P: AsRef<Path>>(path: P, name: &str) -> Result<Value> {
     let tensors = load_safetensors(path)?;
     tensors
@@ -210,7 +203,7 @@ pub fn load_tensor<P: AsRef<Path>>(path: P, name: &str) -> Result<Value> {
         .ok_or_else(|| SafeTensorsError::TensorNotFound(name.to_string()))
 }
 
-/// Проверяет, содержит ли файл SafeTensors указанные тензоры.
+/// Checks whether a SafeTensors file contains the specified tensors.
 pub fn contains_tensors<P: AsRef<Path>>(path: P, names: &[&str]) -> Result<bool> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
@@ -219,10 +212,12 @@ pub fn contains_tensors<P: AsRef<Path>>(path: P, names: &[&str]) -> Result<bool>
     let tensors = SafeTensors::deserialize(&buffer)?;
     let tensor_names: Vec<String> = tensors.names().iter().map(|s| s.to_string()).collect();
 
-    Ok(names.iter().all(|name| tensor_names.contains(&name.to_string())))
+    Ok(names
+        .iter()
+        .all(|name| tensor_names.contains(&name.to_string())))
 }
 
-/// Возвращает список имен тензоров в файле SafeTensors.
+/// Returns the list of tensor names in a SafeTensors file.
 pub fn list_tensors<P: AsRef<Path>>(path: P) -> Result<Vec<String>> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
@@ -232,7 +227,7 @@ pub fn list_tensors<P: AsRef<Path>>(path: P) -> Result<Vec<String>> {
     Ok(tensors.names().iter().map(|s| s.to_string()).collect())
 }
 
-/// Возвращает информацию о тензорах в файле (имя, форма, тип).
+/// Returns information about the tensors in the file (name, shape, dtype).
 pub fn tensor_info<P: AsRef<Path>>(path: P) -> Result<Vec<(String, Vec<usize>, String)>> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
@@ -262,28 +257,27 @@ mod tests {
         let mut weights = HashMap::new();
         weights.insert(
             "test.weight".to_string(),
-            Value::Tensor(ArrayD::from_shape_vec(
-                ndarray::IxDyn(&[2, 3]),
-                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            ).unwrap()),
+            Value::Tensor(
+                ArrayD::from_shape_vec(ndarray::IxDyn(&[2, 3]), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+                    .unwrap(),
+            ),
         );
         weights.insert(
             "test.bias".to_string(),
-            Value::Tensor(ArrayD::from_shape_vec(
-                ndarray::IxDyn(&[3]),
-                vec![0.1, 0.2, 0.3],
-            ).unwrap()),
+            Value::Tensor(
+                ArrayD::from_shape_vec(ndarray::IxDyn(&[3]), vec![0.1, 0.2, 0.3]).unwrap(),
+            ),
         );
 
         let path = "test_safetensors.safetensors";
 
-        // Сохраняем
+        // Save.
         save_safetensors(path, &weights).expect("Failed to save");
 
-        // Загружаем
+        // Load.
         let loaded = load_safetensors(path).expect("Failed to load");
 
-        // Проверяем
+        // Verify.
         assert_eq!(loaded.len(), 2);
         assert!(loaded.contains_key("test.weight"));
         assert!(loaded.contains_key("test.bias"));
@@ -297,7 +291,7 @@ mod tests {
             }
         }
 
-        // Удаляем тестовый файл
+        // Remove the test file.
         fs::remove_file(path).ok();
     }
 

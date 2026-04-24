@@ -1,7 +1,6 @@
-// --- File: src/nn/conv.rs ---
+//! Convolutional layers with declarative shape/init API.
 
-//! Module implementing convolutional layers for image processing.
-
+use crate::nn::init::Initializer;
 use crate::nn::module::Module;
 use crate::tensor::{GraphContext, Tensor};
 use std::cell::RefCell;
@@ -100,9 +99,9 @@ impl Conv2dConfig {
 /// let output = conv.forward(&input);
 /// ```
 pub struct Conv2d {
-    /// Symbolic descriptor for weight tensor [C_out, C_in/groups, kH, kW].
+    /// Symbolic descriptor for weight tensor of shape `[C_out, C_in/groups, kH, kW]`.
     pub weight: Tensor,
-    /// Optional symbolic descriptor for bias [C_out].
+    /// Optional symbolic descriptor for bias of shape `[C_out]`.
     pub bias: Option<Tensor>,
     /// Layer configuration.
     pub config: Conv2dConfig,
@@ -129,23 +128,45 @@ impl Conv2d {
         Self::from_config(context, name, config)
     }
 
-    /// Creates Conv2d layer from configuration.
+    /// Creates Conv2d layer from configuration, registering parameter shapes
+    /// and Kaiming-uniform initialization with the graph context.
     pub fn from_config(
         context: &Rc<RefCell<GraphContext>>,
         name: &str,
         config: Conv2dConfig,
     ) -> Self {
-        let weight_name = format!("{}.weight", name);
-        let weight = Tensor::new_parameter(context, &weight_name);
+        // Weight shape for grouped conv: [C_out, C_in/groups, kH, kW].
+        let c_in_per_group = config.in_channels / config.groups;
+        let weight_shape = vec![
+            config.out_channels,
+            c_in_per_group,
+            config.kernel_size.0,
+            config.kernel_size.1,
+        ];
+
+        let weight = Tensor::new_parameter_with_shape(
+            context,
+            &format!("{}.weight", name),
+            weight_shape,
+            Initializer::KaimingUniform,
+        );
 
         let bias = if config.bias {
-            let bias_name = format!("{}.bias", name);
-            Some(Tensor::new_parameter(context, &bias_name))
+            Some(Tensor::new_parameter_with_shape(
+                context,
+                &format!("{}.bias", name),
+                vec![config.out_channels],
+                Initializer::Zeros,
+            ))
         } else {
             None
         };
 
-        Self { weight, bias, config }
+        Self {
+            weight,
+            bias,
+            config,
+        }
     }
 
     /// Sets convolution stride.
@@ -201,9 +222,9 @@ impl Module for Conv2d {
 /// Used for increasing spatial dimensions (upsampling),
 /// for example in autoencoder decoders and GAN generators.
 pub struct ConvTranspose2d {
-    /// Weights [C_in, C_out/groups, kH, kW].
+    /// Weights of shape `[C_in, C_out/groups, kH, kW]`.
     pub weight: Tensor,
-    /// Optional bias [C_out].
+    /// Optional bias of shape `[C_out]`.
     pub bias: Option<Tensor>,
     /// Stride.
     pub stride: (usize, usize),
@@ -218,7 +239,15 @@ pub struct ConvTranspose2d {
 }
 
 impl ConvTranspose2d {
-    /// Creates a new ConvTranspose2d layer.
+    /// Creates a new ConvTranspose2d layer, registering parameter shapes and
+    /// Kaiming-uniform init with the graph context.
+    ///
+    /// # Arguments
+    /// * `context` — shared graph context.
+    /// * `name` — parameter-name prefix.
+    /// * `in_channels` — number of input channels.
+    /// * `out_channels` — number of output channels.
+    /// * `kernel_size` — `(kH, kW)` of the transposed convolution kernel.
     pub fn new(
         context: &Rc<RefCell<GraphContext>>,
         name: &str,
@@ -226,11 +255,21 @@ impl ConvTranspose2d {
         out_channels: usize,
         kernel_size: (usize, usize),
     ) -> Self {
-        let weight_name = format!("{}.weight", name);
-        let weight = Tensor::new_parameter(context, &weight_name);
+        // ConvTranspose2d weight layout in this framework: [C_in, C_out/groups, kH, kW].
+        // We default to groups=1, so the divisor is 1.
+        let weight = Tensor::new_parameter_with_shape(
+            context,
+            &format!("{}.weight", name),
+            vec![in_channels, out_channels, kernel_size.0, kernel_size.1],
+            Initializer::KaimingUniform,
+        );
 
-        let bias_name = format!("{}.bias", name);
-        let bias = Some(Tensor::new_parameter(context, &bias_name));
+        let bias = Some(Tensor::new_parameter_with_shape(
+            context,
+            &format!("{}.bias", name),
+            vec![out_channels],
+            Initializer::Zeros,
+        ));
 
         Self {
             weight,
@@ -310,7 +349,7 @@ mod tests {
         let input = Tensor::new_input(&context, "input");
         let conv = Conv2d::new(&context, "conv1", 3, 64, (3, 3));
 
-        let output = conv.forward(&input);
+        let _ = conv.forward(&input);
 
         // Check that graph contains Conv2d operation
         let graph = context.borrow().main_graph().clone();
@@ -335,7 +374,7 @@ mod tests {
             .with_stride((2, 2))
             .with_padding((1, 1));
 
-        let output = deconv.forward(&input);
+        let _ = deconv.forward(&input);
         assert_eq!(deconv.parameters().len(), 2); // weight + bias
     }
 }

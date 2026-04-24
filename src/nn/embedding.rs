@@ -5,6 +5,7 @@
 //! words, tokens, and other discrete entities.
 
 use super::module::Module;
+use crate::nn::init::Initializer;
 use crate::tensor::{GraphContext, Tensor};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -52,7 +53,16 @@ impl Embedding {
         embedding_dim: usize,
         name: &str,
     ) -> Self {
-        let weight = Tensor::new_parameter(context, &format!("{}_weight", name));
+        // Standard init for embeddings: Normal(0, 0.02) — matches BERT / GPT-2.
+        let weight = Tensor::new_parameter_with_shape(
+            context,
+            &format!("{}_weight", name),
+            vec![num_embeddings, embedding_dim],
+            Initializer::Normal {
+                mean: 0.0,
+                std: 0.02,
+            },
+        );
 
         Self {
             num_embeddings,
@@ -78,11 +88,11 @@ impl Module for Embedding {
     ///
     /// # Arguments
     ///
-    /// * `indices` - Index tensor of any shape [*]
+    /// * `indices` — index tensor of any shape `[*]`.
     ///
     /// # Returns
     ///
-    /// Tensor of shape [*, embedding_dim]
+    /// Tensor of shape `[*, embedding_dim]`.
     fn forward(&self, input: &Tensor) -> Tensor {
         input.embedding(&self.weight)
     }
@@ -122,7 +132,10 @@ mod tests {
         let output = embedding.forward(&indices);
 
         // Set graph output
-        context.borrow_mut().main_graph_mut().set_output(output.node_id);
+        context
+            .borrow_mut()
+            .main_graph_mut()
+            .set_output(output.node_id);
 
         // Prepare data
         // Embedding weights: 5x3 matrix
@@ -132,7 +145,8 @@ mod tests {
             [7.0, 8.0, 9.0],    // index 2
             [10.0, 11.0, 12.0], // index 3
             [13.0, 14.0, 15.0], // index 4
-        ]).into_dyn();
+        ])
+        .into_dyn();
 
         // Indices: [2, 3] -> select index 0 and index 2
         let indices_data = ArrayD::from_shape_vec(IxDyn(&[2]), vec![0.0, 2.0]).unwrap();
@@ -195,19 +209,18 @@ mod tests {
         let indices = Tensor::new_input(&context, "indices");
         let output = embedding.forward(&indices);
 
-        context.borrow_mut().main_graph_mut().set_output(output.node_id);
+        context
+            .borrow_mut()
+            .main_graph_mut()
+            .set_output(output.node_id);
 
         // Embedding weights: 5x4
-        let weight_data = ArrayD::from_shape_vec(
-            IxDyn(&[5, 4]),
-            (0..20).map(|x| x as f32).collect()
-        ).unwrap();
+        let weight_data =
+            ArrayD::from_shape_vec(IxDyn(&[5, 4]), (0..20).map(|x| x as f32).collect()).unwrap();
 
         // Indices: [2, 3] (batch=2, seq_len=3)
-        let indices_data = ArrayD::from_shape_vec(
-            IxDyn(&[2, 3]),
-            vec![0.0, 1.0, 2.0, 3.0, 4.0, 0.0]
-        ).unwrap();
+        let indices_data =
+            ArrayD::from_shape_vec(IxDyn(&[2, 3]), vec![0.0, 1.0, 2.0, 3.0, 4.0, 0.0]).unwrap();
 
         let mut inputs = HashMap::new();
         inputs.insert("indices".to_string(), Value::Tensor(indices_data));
