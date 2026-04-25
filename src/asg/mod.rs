@@ -214,6 +214,83 @@ pub enum NodeType {
         start: usize,
         full_size: usize,
     },
+
+    /// Bernoulli mask for `Dropout`. Outputs a tensor of the same shape as
+    /// `shape_provider`, where each element is independently
+    /// `1.0 / (1 - p)` with probability `1 - p`, else `0.0`. Effectively
+    /// the "scale-and-zero" mask used at training time:
+    /// `dropout(x) = x * DropoutMask(x, p)`.
+    ///
+    /// A fresh mask is sampled every time the runtime evaluates this node,
+    /// which is exactly once per forward run. Because the value is then
+    /// memoised, the gradient graph (which references this node via
+    /// `External`) sees the *same* mask during backward.
+    DropoutMask {
+        /// Tensor whose shape the mask should match. The mask reads no values
+        /// from `shape_provider`, only its dimensions.
+        shape_provider: NodeId,
+        /// Drop probability — fraction of elements that will be set to 0.
+        p: f32,
+    },
+
+    /// Mean of `input` along a single axis.
+    /// Output shape: `input.shape` with `axis` either removed (`keepdims=false`)
+    /// or replaced with `1` (`keepdims=true`).
+    MeanAxis {
+        input: NodeId,
+        axis: usize,
+        keepdims: bool,
+    },
+
+    /// Variance of `input` along a single axis (unbiased=false, divides by `N`).
+    /// Output shape follows the same rules as [`NodeType::MeanAxis`].
+    VarianceAxis {
+        input: NodeId,
+        axis: usize,
+        keepdims: bool,
+    },
+
+    /// Batch normalization along the **channel axis** `channel_axis`.
+    ///
+    /// For each channel `c`, computes `mean` and `variance` across **all
+    /// other axes** (i.e. batch + spatial), then applies
+    /// `y = gamma[c] * (x - mean[c]) / sqrt(var[c] + eps) + beta[c]`.
+    ///
+    /// Typical usage:
+    /// - 2D `[N, C]` → `channel_axis = 1`.
+    /// - 4D `[N, C, H, W]` → `channel_axis = 1`.
+    ///
+    /// `gamma` and `beta` must be 1D tensors of length `C`.
+    BatchNorm {
+        input: NodeId,
+        gamma: NodeId,
+        beta: NodeId,
+        eps: f32,
+        channel_axis: usize,
+    },
+
+    /// Gradient of `BatchNorm` w.r.t. the input.
+    BatchNormBackward {
+        grad_output: NodeId,
+        input: NodeId,
+        gamma: NodeId,
+        eps: f32,
+        channel_axis: usize,
+    },
+
+    /// Gradient of `BatchNorm` w.r.t. `gamma`. Output is 1D of length `C`.
+    BatchNormGradGamma {
+        grad_output: NodeId,
+        input: NodeId,
+        eps: f32,
+        channel_axis: usize,
+    },
+
+    /// Gradient of `BatchNorm` w.r.t. `beta`. Output is 1D of length `C`.
+    BatchNormGradBeta {
+        grad_output: NodeId,
+        channel_axis: usize,
+    },
     /// Broadcasts the first tensor (scalar) to the shape of the second tensor.
     /// Used mainly in gradient graph, e.g., for grad(Sum).
     Broadcast(NodeId, NodeId),

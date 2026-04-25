@@ -713,6 +713,49 @@ impl Gradients {
                 self.acc(*beta, g_beta)?;
             }
 
+            NodeType::BatchNorm {
+                input,
+                gamma,
+                beta,
+                eps,
+                channel_axis,
+            } => {
+                let input_node = self.import(*input)?;
+                let gamma_node = self.import(*gamma)?;
+
+                let g_input = self.grad.add_node(
+                    None,
+                    NodeType::BatchNormBackward {
+                        grad_output: g_out,
+                        input: input_node,
+                        gamma: gamma_node,
+                        eps: *eps,
+                        channel_axis: *channel_axis,
+                    },
+                );
+                self.acc(*input, g_input)?;
+
+                let g_gamma = self.grad.add_node(
+                    None,
+                    NodeType::BatchNormGradGamma {
+                        grad_output: g_out,
+                        input: input_node,
+                        eps: *eps,
+                        channel_axis: *channel_axis,
+                    },
+                );
+                self.acc(*gamma, g_gamma)?;
+
+                let g_beta = self.grad.add_node(
+                    None,
+                    NodeType::BatchNormGradBeta {
+                        grad_output: g_out,
+                        channel_axis: *channel_axis,
+                    },
+                );
+                self.acc(*beta, g_beta)?;
+            }
+
             NodeType::Slice {
                 input, axis, start, ..
             } => {
@@ -762,6 +805,40 @@ impl Gradients {
                     self.acc(input_id, g_slice)?;
                     offset += width;
                 }
+            }
+
+            NodeType::DropoutMask { .. } => {
+                // The mask is a sampled random variable, not differentiable
+                // w.r.t. the shape provider. The actual gradient flow goes
+                // through the `Multiply(input, mask)` node instead — the
+                // backward rule for `Multiply` already routes `grad * mask`
+                // back to `input`, which is what we want.
+            }
+
+            NodeType::MeanAxis { input, axis, .. } => {
+                // dL/dx[..., k, ...] = grad_y[..., ...] / N, broadcast along axis.
+                let input_shape = self.src.get_node(*input)?.shape.as_ref().ok_or_else(|| {
+                    AutogradError::Asg(AsgError::InvalidGraph(format!(
+                        "MeanAxis backward: input node {} has no shape",
+                        input
+                    )))
+                })?;
+                let n = input_shape[*axis] as f32;
+                let scale = self.lit_scalar(1.0 / n);
+                // Use the original `input` (imported as External) as the
+                // broadcast target — its shape is exactly what we need.
+                let input_ext = self.import(*input)?;
+                let scaled = self.grad.add_node(None, NodeType::Multiply(g_out, scale));
+                let broadcast = self
+                    .grad
+                    .add_node(None, NodeType::Broadcast(scaled, input_ext));
+                self.acc(*input, broadcast)?;
+            }
+
+            NodeType::VarianceAxis { .. } => {
+                // VarianceAxis is currently used inside specialised BatchNorm
+                // nodes that have their own backward rules; standalone use
+                // would require a chain-rule implementation we don't yet need.
             }
 
             _ => {}
@@ -892,6 +969,23 @@ fn inputs_of(nt: &NodeType) -> Vec<NodeId> {
         NodeType::Slice { input, .. } => vec![*input],
         NodeType::Concat { inputs, .. } => inputs.clone(),
         NodeType::SliceBackward { grad_output, .. } => vec![*grad_output],
+        NodeType::DropoutMask { shape_provider, .. } => vec![*shape_provider],
+        NodeType::MeanAxis { input, .. } | NodeType::VarianceAxis { input, .. } => {
+            vec![*input]
+        }
+        NodeType::BatchNorm {
+            input, gamma, beta, ..
+        } => vec![*input, *gamma, *beta],
+        NodeType::BatchNormBackward {
+            grad_output,
+            input,
+            gamma,
+            ..
+        } => vec![*grad_output, *input, *gamma],
+        NodeType::BatchNormGradGamma {
+            grad_output, input, ..
+        } => vec![*grad_output, *input],
+        NodeType::BatchNormGradBeta { grad_output, .. } => vec![*grad_output],
         _ => vec![],
     }
 }

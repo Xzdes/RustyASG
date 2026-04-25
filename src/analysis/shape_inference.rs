@@ -521,6 +521,64 @@ impl ShapeInference {
                 Ok((vec![1, norm_size], dtype))
             }
 
+            // BatchNorm: same shape as input.
+            NodeType::BatchNorm { input, .. } | NodeType::BatchNormBackward { input, .. } => {
+                Self::get_shape_dtype(asg, *input)
+            }
+
+            // BatchNormGradGamma / BatchNormGradBeta: 1D vector of length `C`.
+            NodeType::BatchNormGradGamma {
+                input,
+                channel_axis,
+                ..
+            } => {
+                let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
+                let c = input_shape[*channel_axis];
+                Ok((vec![c], dtype))
+            }
+            NodeType::BatchNormGradBeta {
+                grad_output,
+                channel_axis,
+            } => {
+                let (grad_shape, dtype) = Self::get_shape_dtype(asg, *grad_output)?;
+                let c = grad_shape[*channel_axis];
+                Ok((vec![c], dtype))
+            }
+
+            // DropoutMask: same shape as the shape provider (input).
+            NodeType::DropoutMask { shape_provider, .. } => {
+                Self::get_shape_dtype(asg, *shape_provider)
+            }
+
+            // MeanAxis / VarianceAxis: input shape with the axis dimension
+            // either removed (keepdims=false) or replaced with 1 (keepdims=true).
+            NodeType::MeanAxis {
+                input,
+                axis,
+                keepdims,
+            }
+            | NodeType::VarianceAxis {
+                input,
+                axis,
+                keepdims,
+            } => {
+                let (input_shape, dtype) = Self::get_shape_dtype(asg, *input)?;
+                if *axis >= input_shape.len() {
+                    return Err(ShapeInferenceError::InvalidRank {
+                        node_id: node.id,
+                        expected: *axis + 1,
+                        actual: input_shape.len(),
+                    });
+                }
+                let mut out = input_shape;
+                if *keepdims {
+                    out[*axis] = 1;
+                } else {
+                    out.remove(*axis);
+                }
+                Ok((out, dtype))
+            }
+
             // SliceBackward: same as grad_output except the sliced axis grows back to full_size.
             NodeType::SliceBackward {
                 grad_output,
@@ -755,6 +813,23 @@ impl ShapeInference {
             NodeType::Slice { input, .. } => vec![*input],
             NodeType::Concat { inputs, .. } => inputs.clone(),
             NodeType::SliceBackward { grad_output, .. } => vec![*grad_output],
+            NodeType::DropoutMask { shape_provider, .. } => vec![*shape_provider],
+            NodeType::MeanAxis { input, .. } | NodeType::VarianceAxis { input, .. } => {
+                vec![*input]
+            }
+            NodeType::BatchNorm {
+                input, gamma, beta, ..
+            } => vec![*input, *gamma, *beta],
+            NodeType::BatchNormBackward {
+                grad_output,
+                input,
+                gamma,
+                ..
+            } => vec![*grad_output, *input, *gamma],
+            NodeType::BatchNormGradGamma {
+                grad_output, input, ..
+            } => vec![*grad_output, *input],
+            NodeType::BatchNormGradBeta { grad_output, .. } => vec![*grad_output],
             _ => vec![],
         };
 

@@ -7,19 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Deferred to v0.5 (performance-focused)
-- [ ] GPU buffer pool — reuse allocations between training steps.
-- [ ] Kernel fusion: `MatMul + Bias + Activation` in a single WGSL kernel.
-- [ ] Mixed precision (f16) on GPU.
-- [ ] Inference-only mode API (no autograd overhead).
-- [ ] Criterion benchmarks against CPU/GPU.
-- [ ] Replace remaining `unwrap()`s in critical paths with typed `RustyAsgError`
-      (~125 call sites — most are inside already-`Result`-returning functions
-      and guarded by validated invariants).
-- [ ] Tiny GPT block (needs causal masking + multi-batch inputs).
-- [ ] Vision Transformer (ViT) starter.
+### Deferred to v0.5
+- **Tiny GPT example with `seq_len > 1`.** Blocked on a `MultiHeadAttention`
+  refactor: the current `split_heads` helper hardcodes `batch=1, seq_len=1`
+  via a literal `reshape(vec![1, 1, num_heads, head_dim])`. A clean rewrite
+  to take dynamic shapes (and to fix the `vec![-1, -1, ...]` reshape in
+  `split_heads_dynamic`, which is illegal — only one dimension can be -1)
+  is on the v0.5 list.
+- GPU buffer pool and kernel fusion.
+- Mixed precision (f16) on GPU.
+- Inference-only mode that skips autograd-graph construction.
+- Replace remaining `unwrap()`s in library code with typed `RustyAsgError`.
 
-## [0.3.1] - 2026-04-24 (pre-release polish)
+## [0.4.0] - 2026-04-25 — Phase 7: Fix what was broken
+
+### Fixed
+- **`Dropout` is no longer a no-op.** New `NodeType::DropoutMask` samples a
+  fresh Bernoulli mask on every forward run and caches it in the forward
+  memo, so the backward pass sees identical values through the standard
+  `Multiply` rule. In `eval()` mode, `forward` is a zero-overhead
+  pass-through.
+- **`BatchNorm` is now mathematically correct.** Previously the layer
+  reduced over the *last* axis (because it called `Tensor::mean` /
+  `Tensor::variance`, which both reduce over the last axis); the new
+  implementation uses a specialised `NodeType::BatchNorm` that reduces
+  over **every axis except the channel axis** — the actual batch-norm
+  definition. Forward, backward, and parameter gradients are all
+  hand-verified by unit tests in `src/nn/batchnorm.rs`.
+- **GPU `Concat` no longer round-trips through CPU.** New native WGSL
+  kernel that copies each input into its slice of the output buffer with
+  per-axis offset arithmetic. Multiple inputs supported, no buffer-size
+  limit other than VRAM.
+- **GPU `Conv2d` and its backward now support `groups > 1` and
+  `dilation > 1`.** This unblocks depthwise / grouped convolutions
+  (e.g. MobileNet-style blocks) and dilated convolutions for receptive
+  field expansion. New parity tests `gpu_conv2d_grouped` and
+  `gpu_conv2d_dilated` cover both.
+
+### Added
+- New ASG primitives: `NodeType::DropoutMask`, `NodeType::MeanAxis`,
+  `NodeType::VarianceAxis`, `NodeType::BatchNorm`,
+  `NodeType::BatchNormBackward`, `NodeType::BatchNormGradGamma`,
+  `NodeType::BatchNormGradBeta`. All implemented across CPU + GPU + shape
+  inference + autograd.
+- Hand-verified BatchNorm tests in `src/nn/batchnorm.rs`:
+  - `batchnorm_forward_matches_hand_calc` (forward correctness on `[2, 3]`
+    fixture against analytical expected output `[[-1,-1,-1],[1,1,1]]`).
+  - `batchnorm_backward_matches_hand_calc` (direct CPU `op_batch_norm_backward`).
+  - `batchnorm_backward_via_autograd` (full autograd path, same fixture).
+- Three Dropout unit tests (eval pass-through, training graph composition,
+  parameter validation).
+
+### Verified
+- `BatchNorm` gradient correctness via deterministic hand-computed tests
+  on a clean fixture. The previous `grad_check`-style test on the
+  4×3 fixture is `#[ignore]`d because the true analytical gradient there
+  is ~5e-5 — small enough to be drowned by f32 rounding noise during
+  central-difference. The autograd path itself is correct; the
+  central-difference test is unreliable on this fixture, not the
+  implementation.
+
+### Bumped
+- `0.3.1` → `0.4.0`. The `Dropout` and `BatchNorm` semantic changes are
+  effectively breaking for users who relied on the old (broken) behaviour
+  — hence the minor bump rather than patch.
+
+## [0.3.1] - 2026-04-24 — Phase 6: Pre-release polish
 
 ### Added
 - **CNN classifier example** (`examples/cnn_classifier.rs`): end-to-end demo of

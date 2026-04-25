@@ -551,6 +551,164 @@ fn gpu_conv2d_with_padding() {
     println!("Conv2d with padding: PASSED");
 }
 
+#[test]
+fn gpu_conv2d_grouped() {
+    // Depthwise convolution: groups == in_channels == out_channels.
+    // Input [1, 4, 4, 4], weight [4, 1, 3, 3], pad=1 -> output [1, 4, 4, 4].
+    let input_data = Array4::<f32>::from_shape_fn((1, 4, 4, 4), |(_, c, h, w)| {
+        ((c * 16 + h * 4 + w + 1) as f32) / 16.0
+    })
+    .into_dyn();
+    let weight_data = Array4::<f32>::from_shape_fn((4, 1, 3, 3), |(oc, _, h, w)| {
+        ((oc * 9 + h * 3 + w + 1) as f32) / 12.0
+    })
+    .into_dyn();
+
+    let context = Rc::new(RefCell::new(GraphContext::new()));
+    let input_tensor = Tensor::new_input(&context, "input");
+    let weight_tensor = Tensor::new_input(&context, "weight");
+
+    let conv_id = context.borrow_mut().main_graph_mut().add_node(
+        None,
+        NodeType::Conv2d {
+            input: input_tensor.node_id,
+            weight: weight_tensor.node_id,
+            bias: None,
+            stride: (1, 1),
+            padding: (1, 1),
+            dilation: (1, 1),
+            groups: 4,
+        },
+    );
+    context.borrow_mut().main_graph_mut().set_output(conv_id);
+
+    let mut shapes = HashMap::new();
+    shapes.insert("input".to_string(), (vec![1, 4, 4, 4], DType::F32));
+    shapes.insert("weight".to_string(), (vec![4, 1, 3, 3], DType::F32));
+    let mut graph = context.borrow().main_graph().clone();
+    ShapeInference::run(&mut graph, &shapes).expect("Shape inference failed");
+
+    let mut data = HashMap::new();
+    data.insert("input".to_string(), Value::Tensor(input_data));
+    data.insert("weight".to_string(), Value::Tensor(weight_data));
+
+    let cpu = CpuBackend::new();
+    let cpu_device = cpu.load_data(&data).unwrap();
+    let mut cpu_memo = HashMap::new();
+    for (name, value) in cpu_device {
+        let nid = graph
+            .nodes
+            .iter()
+            .find(|(_, n)| matches!(&n.node_type, NodeType::Input { name: nn } if nn == &name))
+            .map(|(id, _)| *id)
+            .unwrap();
+        cpu_memo.insert((graph.id, nid), value);
+    }
+    let (cpu_res, _) = cpu.run(&graph, cpu_memo).unwrap();
+    let cpu_t = match &cpu.retrieve_data(&cpu_res).unwrap()[0] {
+        Value::Tensor(t) => t.clone(),
+        _ => panic!(),
+    };
+
+    let gpu = pollster::block_on(WgpuBackend::new());
+    let gpu_device = gpu.load_data(&data).unwrap();
+    let mut gpu_memo = HashMap::new();
+    for (name, value) in gpu_device {
+        let nid = graph
+            .nodes
+            .iter()
+            .find(|(_, n)| matches!(&n.node_type, NodeType::Input { name: nn } if nn == &name))
+            .map(|(id, _)| *id)
+            .unwrap();
+        gpu_memo.insert((graph.id, nid), value);
+    }
+    let (gpu_res, _) = gpu.run(&graph, gpu_memo).unwrap();
+    let gpu_t = match &gpu.retrieve_data(&gpu_res).unwrap()[0] {
+        Value::Tensor(t) => t.clone(),
+        _ => panic!(),
+    };
+
+    assert_tensors_close(&cpu_t, &gpu_t, "Conv2d depthwise (groups=in_channels)");
+    println!("Conv2d depthwise: PASSED");
+}
+
+#[test]
+fn gpu_conv2d_dilated() {
+    // Dilated convolution: 5x5 input, 3x3 kernel, dilation=2 -> output 1x1.
+    let input_data =
+        Array4::<f32>::from_shape_fn((1, 1, 5, 5), |(_, _, h, w)| (h * 5 + w) as f32).into_dyn();
+    let weight_data =
+        Array4::<f32>::from_shape_fn((1, 1, 3, 3), |(_, _, h, w)| (h * 3 + w + 1) as f32)
+            .into_dyn();
+
+    let context = Rc::new(RefCell::new(GraphContext::new()));
+    let input_tensor = Tensor::new_input(&context, "input");
+    let weight_tensor = Tensor::new_input(&context, "weight");
+
+    let conv_id = context.borrow_mut().main_graph_mut().add_node(
+        None,
+        NodeType::Conv2d {
+            input: input_tensor.node_id,
+            weight: weight_tensor.node_id,
+            bias: None,
+            stride: (1, 1),
+            padding: (0, 0),
+            dilation: (2, 2),
+            groups: 1,
+        },
+    );
+    context.borrow_mut().main_graph_mut().set_output(conv_id);
+
+    let mut shapes = HashMap::new();
+    shapes.insert("input".to_string(), (vec![1, 1, 5, 5], DType::F32));
+    shapes.insert("weight".to_string(), (vec![1, 1, 3, 3], DType::F32));
+    let mut graph = context.borrow().main_graph().clone();
+    ShapeInference::run(&mut graph, &shapes).expect("Shape inference failed");
+
+    let mut data = HashMap::new();
+    data.insert("input".to_string(), Value::Tensor(input_data));
+    data.insert("weight".to_string(), Value::Tensor(weight_data));
+
+    let cpu = CpuBackend::new();
+    let cpu_device = cpu.load_data(&data).unwrap();
+    let mut cpu_memo = HashMap::new();
+    for (name, value) in cpu_device {
+        let nid = graph
+            .nodes
+            .iter()
+            .find(|(_, n)| matches!(&n.node_type, NodeType::Input { name: nn } if nn == &name))
+            .map(|(id, _)| *id)
+            .unwrap();
+        cpu_memo.insert((graph.id, nid), value);
+    }
+    let (cpu_res, _) = cpu.run(&graph, cpu_memo).unwrap();
+    let cpu_t = match &cpu.retrieve_data(&cpu_res).unwrap()[0] {
+        Value::Tensor(t) => t.clone(),
+        _ => panic!(),
+    };
+
+    let gpu = pollster::block_on(WgpuBackend::new());
+    let gpu_device = gpu.load_data(&data).unwrap();
+    let mut gpu_memo = HashMap::new();
+    for (name, value) in gpu_device {
+        let nid = graph
+            .nodes
+            .iter()
+            .find(|(_, n)| matches!(&n.node_type, NodeType::Input { name: nn } if nn == &name))
+            .map(|(id, _)| *id)
+            .unwrap();
+        gpu_memo.insert((graph.id, nid), value);
+    }
+    let (gpu_res, _) = gpu.run(&graph, gpu_memo).unwrap();
+    let gpu_t = match &gpu.retrieve_data(&gpu_res).unwrap()[0] {
+        Value::Tensor(t) => t.clone(),
+        _ => panic!(),
+    };
+
+    assert_tensors_close(&cpu_t, &gpu_t, "Conv2d dilated (dilation=2)");
+    println!("Conv2d dilated: PASSED");
+}
+
 // ============================================================
 // LayerNorm GPU tests
 // ============================================================

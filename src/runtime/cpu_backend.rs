@@ -400,6 +400,71 @@ impl<'a> ExecutionContext<'a> {
                 op_slice_backward(grad_val, *axis, *start, *full_size)
             }
 
+            NodeType::DropoutMask { shape_provider, p } => {
+                let shape_val = self.evaluate_node(asg_id, *shape_provider)?;
+                op_dropout_mask(shape_val, *p)
+            }
+
+            NodeType::MeanAxis {
+                input,
+                axis,
+                keepdims,
+            } => {
+                let input_val = self.evaluate_node(asg_id, *input)?;
+                op_mean_axis(input_val, *axis, *keepdims)
+            }
+
+            NodeType::VarianceAxis {
+                input,
+                axis,
+                keepdims,
+            } => {
+                let input_val = self.evaluate_node(asg_id, *input)?;
+                op_variance_axis(input_val, *axis, *keepdims)
+            }
+
+            NodeType::BatchNorm {
+                input,
+                gamma,
+                beta,
+                eps,
+                channel_axis,
+            } => {
+                let x = self.evaluate_node(asg_id, *input)?;
+                let g = self.evaluate_node(asg_id, *gamma)?;
+                let b = self.evaluate_node(asg_id, *beta)?;
+                op_batch_norm(x, g, b, *eps, *channel_axis)
+            }
+            NodeType::BatchNormBackward {
+                grad_output,
+                input,
+                gamma,
+                eps,
+                channel_axis,
+            } => {
+                let dy = self.evaluate_node(asg_id, *grad_output)?;
+                let x = self.evaluate_node(asg_id, *input)?;
+                let g = self.evaluate_node(asg_id, *gamma)?;
+                op_batch_norm_backward(dy, x, g, *eps, *channel_axis)
+            }
+            NodeType::BatchNormGradGamma {
+                grad_output,
+                input,
+                eps,
+                channel_axis,
+            } => {
+                let dy = self.evaluate_node(asg_id, *grad_output)?;
+                let x = self.evaluate_node(asg_id, *input)?;
+                op_batch_norm_grad_gamma(dy, x, *eps, *channel_axis)
+            }
+            NodeType::BatchNormGradBeta {
+                grad_output,
+                channel_axis,
+            } => {
+                let dy = self.evaluate_node(asg_id, *grad_output)?;
+                op_batch_norm_grad_beta(dy, *channel_axis)
+            }
+
             _ => Err(RuntimeError::UnimplementedOperation(format!(
                 "{:?}",
                 node.node_type
@@ -2163,4 +2228,422 @@ fn op_concat(inputs: Vec<Value>, axis: usize) -> Result<Value, RuntimeError> {
     let concatenated = ndarray::concatenate(ndarray::Axis(axis), &views)
         .map_err(|e| RuntimeError::ShapeError(format!("Concat failed: {}", e)))?;
     Ok(Value::Tensor(concatenated))
+}
+
+/// Bernoulli dropout mask. Output has the same shape as `shape_provider`.
+/// Each element is `1.0 / (1 - p)` with probability `1 - p`, else `0.0`.
+/// `p == 0.0` short-circuits to ones (no-op), `p >= 1.0` is rejected.
+fn op_dropout_mask(shape_provider: Value, p: f32) -> Result<Value, RuntimeError> {
+    use rand::Rng;
+    let arr = match shape_provider {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+    if !(0.0..1.0).contains(&p) {
+        return Err(RuntimeError::ShapeError(format!(
+            "DropoutMask requires p in [0, 1), got {}",
+            p
+        )));
+    }
+
+    let shape = arr.shape().to_vec();
+    let total: usize = shape.iter().product();
+    let scale = 1.0 / (1.0 - p);
+    let mut rng = rand::rng();
+
+    let mut mask = Vec::with_capacity(total);
+    for _ in 0..total {
+        let r: f32 = rng.random();
+        mask.push(if r < p { 0.0 } else { scale });
+    }
+    let mask_arr = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), mask)
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+    Ok(Value::Tensor(mask_arr))
+}
+
+/// Mean of `input` along `axis`. If `keepdims` is true, the reduced axis is
+/// retained as a singleton; otherwise it is removed.
+fn op_mean_axis(input: Value, axis: usize, keepdims: bool) -> Result<Value, RuntimeError> {
+    let arr = match input {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+    if axis >= arr.ndim() {
+        return Err(RuntimeError::ShapeError(format!(
+            "MeanAxis axis {} out of bounds for rank {}",
+            axis,
+            arr.ndim()
+        )));
+    }
+    let reduced = arr.mean_axis(ndarray::Axis(axis)).ok_or_else(|| {
+        RuntimeError::ShapeError(format!("MeanAxis: cannot reduce empty axis {}", axis))
+    })?;
+
+    let final_arr = if keepdims {
+        let mut new_shape = reduced.shape().to_vec();
+        new_shape.insert(axis, 1);
+        reduced
+            .into_shape_with_order(new_shape)
+            .map_err(|e| RuntimeError::ShapeError(e.to_string()))?
+    } else {
+        reduced
+    };
+    Ok(Value::Tensor(final_arr))
+}
+
+/// Internal: compute per-channel mean and variance for `BatchNorm`.
+///
+/// `x` is treated as having a channel axis at `channel_axis`. The function
+/// reduces over **every other axis** (batch + spatial), producing 1D vectors
+/// `(mean[C], var[C], inv_std[C])`.
+// The BatchNorm helpers below loop over the *flat* index of a multi-dim
+// tensor and decompose it into a channel slot + spatial offset on each
+// iteration. Using `iter().enumerate()` here would force a separate
+// channel-decomposition pass; `0..total` keeps the math close to the
+// inner loop's intent.
+#[allow(clippy::needless_range_loop)]
+fn batch_norm_stats(
+    x: &ndarray::ArrayD<f32>,
+    channel_axis: usize,
+    eps: f32,
+) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let shape = x.shape();
+    let c = shape[channel_axis];
+    let total: usize = shape.iter().product();
+    let per_channel = total / c;
+    let inv_n = 1.0_f32 / per_channel as f32;
+
+    // Strides in row-major (C-contiguous) layout.
+    let mut strides = vec![1usize; shape.len()];
+    for i in (0..shape.len().saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+
+    let flat = x.as_slice().expect("BatchNorm input must be contiguous");
+
+    let mut sum = vec![0.0_f32; c];
+    let mut sum_sq = vec![0.0_f32; c];
+
+    // Iterate every flat index, decompose to grab its channel.
+    for idx in 0..total {
+        let ch = (idx / strides[channel_axis]) % c;
+        let v = flat[idx];
+        sum[ch] += v;
+        sum_sq[ch] += v * v;
+    }
+
+    let mut mean = vec![0.0_f32; c];
+    let mut var = vec![0.0_f32; c];
+    let mut inv_std = vec![0.0_f32; c];
+    for ch in 0..c {
+        mean[ch] = sum[ch] * inv_n;
+        var[ch] = sum_sq[ch] * inv_n - mean[ch] * mean[ch];
+        inv_std[ch] = 1.0 / (var[ch] + eps).sqrt();
+    }
+    (mean, var, inv_std)
+}
+
+/// BatchNorm forward: `y = gamma[c] * (x - mean[c]) / sqrt(var[c] + eps) + beta[c]`.
+#[allow(clippy::needless_range_loop)]
+fn op_batch_norm(
+    x: Value,
+    gamma: Value,
+    beta: Value,
+    eps: f32,
+    channel_axis: usize,
+) -> Result<Value, RuntimeError> {
+    let x_arr = match x {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+    let gamma_arr = match gamma {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+    let beta_arr = match beta {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+
+    let shape = x_arr.shape().to_vec();
+    let c = shape[channel_axis];
+    let (mean, _var, inv_std) = batch_norm_stats(&x_arr, channel_axis, eps);
+
+    let gamma_slice = gamma_arr
+        .as_slice()
+        .expect("BatchNorm gamma must be contiguous");
+    let beta_slice = beta_arr
+        .as_slice()
+        .expect("BatchNorm beta must be contiguous");
+    if gamma_slice.len() != c || beta_slice.len() != c {
+        return Err(RuntimeError::ShapeError(format!(
+            "BatchNorm gamma/beta must be 1D length {} (channel axis = {})",
+            c, channel_axis
+        )));
+    }
+
+    let total: usize = shape.iter().product();
+    let mut strides = vec![1usize; shape.len()];
+    for i in (0..shape.len().saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+
+    let x_flat = x_arr.as_slice().unwrap();
+    let mut out_flat = vec![0.0_f32; total];
+    for idx in 0..total {
+        let ch = (idx / strides[channel_axis]) % c;
+        let normalized = (x_flat[idx] - mean[ch]) * inv_std[ch];
+        out_flat[idx] = normalized * gamma_slice[ch] + beta_slice[ch];
+    }
+
+    let out = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), out_flat)
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+    Ok(Value::Tensor(out))
+}
+
+/// BatchNorm backward w.r.t. input.
+/// Standard formula:
+/// `dx = (gamma * inv_std) * (dy - mean(dy) - x_norm * mean(dy * x_norm))`
+/// where mean is over the non-channel axes.
+#[allow(clippy::needless_range_loop)]
+fn op_batch_norm_backward(
+    dy: Value,
+    x: Value,
+    gamma: Value,
+    eps: f32,
+    channel_axis: usize,
+) -> Result<Value, RuntimeError> {
+    let dy_arr = match dy {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+    let x_arr = match x {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+    let gamma_arr = match gamma {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+
+    let shape = x_arr.shape().to_vec();
+    let c = shape[channel_axis];
+    let total: usize = shape.iter().product();
+    let per_channel = total / c;
+    let inv_n = 1.0_f32 / per_channel as f32;
+
+    let (mean, _var, inv_std) = batch_norm_stats(&x_arr, channel_axis, eps);
+    let gamma_slice = gamma_arr.as_slice().unwrap();
+
+    let mut strides = vec![1usize; shape.len()];
+    for i in (0..shape.len().saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+
+    let x_flat = x_arr.as_slice().unwrap();
+    let dy_flat = dy_arr.as_slice().unwrap();
+
+    // Per-channel reductions of dy and dy * x_norm.
+    let mut sum_dy = vec![0.0_f32; c];
+    let mut sum_dy_xn = vec![0.0_f32; c];
+    for idx in 0..total {
+        let ch = (idx / strides[channel_axis]) % c;
+        let xn = (x_flat[idx] - mean[ch]) * inv_std[ch];
+        sum_dy[ch] += dy_flat[idx];
+        sum_dy_xn[ch] += dy_flat[idx] * xn;
+    }
+    let mut mean_dy = vec![0.0_f32; c];
+    let mut mean_dy_xn = vec![0.0_f32; c];
+    for ch in 0..c {
+        mean_dy[ch] = sum_dy[ch] * inv_n;
+        mean_dy_xn[ch] = sum_dy_xn[ch] * inv_n;
+    }
+
+    let mut dx_flat = vec![0.0_f32; total];
+    for idx in 0..total {
+        let ch = (idx / strides[channel_axis]) % c;
+        let xn = (x_flat[idx] - mean[ch]) * inv_std[ch];
+        // dx = (gamma * inv_std) * (dy - mean_dy - xn * mean_dy_xn).
+        dx_flat[idx] =
+            gamma_slice[ch] * inv_std[ch] * (dy_flat[idx] - mean_dy[ch] - xn * mean_dy_xn[ch]);
+    }
+
+    let dx = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), dx_flat)
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+    Ok(Value::Tensor(dx))
+}
+
+/// `grad_gamma[c] = sum over non-channel axes of dy * x_norm`.
+#[allow(clippy::needless_range_loop)]
+fn op_batch_norm_grad_gamma(
+    dy: Value,
+    x: Value,
+    eps: f32,
+    channel_axis: usize,
+) -> Result<Value, RuntimeError> {
+    let dy_arr = match dy {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+    let x_arr = match x {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+
+    let shape = x_arr.shape().to_vec();
+    let c = shape[channel_axis];
+    let total: usize = shape.iter().product();
+
+    let (mean, _var, inv_std) = batch_norm_stats(&x_arr, channel_axis, eps);
+
+    let mut strides = vec![1usize; shape.len()];
+    for i in (0..shape.len().saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+
+    let x_flat = x_arr.as_slice().unwrap();
+    let dy_flat = dy_arr.as_slice().unwrap();
+
+    let mut grad_gamma = vec![0.0_f32; c];
+    for idx in 0..total {
+        let ch = (idx / strides[channel_axis]) % c;
+        let xn = (x_flat[idx] - mean[ch]) * inv_std[ch];
+        grad_gamma[ch] += dy_flat[idx] * xn;
+    }
+
+    let out = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[c]), grad_gamma)
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+    Ok(Value::Tensor(out))
+}
+
+/// `grad_beta[c] = sum over non-channel axes of dy`.
+#[allow(clippy::needless_range_loop)]
+fn op_batch_norm_grad_beta(dy: Value, channel_axis: usize) -> Result<Value, RuntimeError> {
+    let dy_arr = match dy {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+
+    let shape = dy_arr.shape().to_vec();
+    let c = shape[channel_axis];
+    let total: usize = shape.iter().product();
+
+    let mut strides = vec![1usize; shape.len()];
+    for i in (0..shape.len().saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+
+    let dy_flat = dy_arr.as_slice().unwrap();
+    let mut grad_beta = vec![0.0_f32; c];
+    for idx in 0..total {
+        let ch = (idx / strides[channel_axis]) % c;
+        grad_beta[ch] += dy_flat[idx];
+    }
+
+    let out = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[c]), grad_beta)
+        .map_err(|e| RuntimeError::ShapeError(e.to_string()))?;
+    Ok(Value::Tensor(out))
+}
+
+/// Variance of `input` along `axis`, divisor `N` (population variance).
+/// Formula: `mean(x^2) - mean(x)^2`.
+fn op_variance_axis(input: Value, axis: usize, keepdims: bool) -> Result<Value, RuntimeError> {
+    let arr = match input {
+        Value::Tensor(t) => t,
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "Tensor".into(),
+                actual: "non-tensor".into(),
+            })
+        }
+    };
+    if axis >= arr.ndim() {
+        return Err(RuntimeError::ShapeError(format!(
+            "VarianceAxis axis {} out of bounds for rank {}",
+            axis,
+            arr.ndim()
+        )));
+    }
+
+    let mean = arr
+        .mean_axis(ndarray::Axis(axis))
+        .ok_or_else(|| RuntimeError::ShapeError("VarianceAxis: empty axis".into()))?;
+    // Broadcast mean back to subtract.
+    let mean_kept = {
+        let mut s = mean.shape().to_vec();
+        s.insert(axis, 1);
+        mean.clone()
+            .into_shape_with_order(s)
+            .map_err(|e| RuntimeError::ShapeError(e.to_string()))?
+    };
+    let centered = &arr - &mean_kept;
+    let sq = &centered * &centered;
+    let var = sq
+        .mean_axis(ndarray::Axis(axis))
+        .ok_or_else(|| RuntimeError::ShapeError("VarianceAxis: empty axis (sq)".into()))?;
+
+    let final_arr = if keepdims {
+        let mut s = var.shape().to_vec();
+        s.insert(axis, 1);
+        var.into_shape_with_order(s)
+            .map_err(|e| RuntimeError::ShapeError(e.to_string()))?
+    } else {
+        var
+    };
+    Ok(Value::Tensor(final_arr))
 }

@@ -50,6 +50,20 @@ fn fmt_u32_array(vals: &[usize]) -> String {
         .join(", ")
 }
 
+/// Selector for the axis-reduction helper.
+#[derive(Clone, Copy)]
+enum AxisReductionKind {
+    Mean,
+    Variance,
+}
+
+/// Selector for `BatchNorm` parameter gradients.
+#[derive(Clone, Copy)]
+enum BatchNormGradKind {
+    Gamma,
+    Beta,
+}
+
 /// Represents a tensor stored in GPU memory.
 ///
 /// This struct wraps a wgpu buffer and its associated shape information.
@@ -128,8 +142,10 @@ impl WgpuBackend {
         Ok(Self { device, queue })
     }
 
-    /// Reads a GPU buffer back to CPU as raw bytes. Used by shaders that fall
-    /// back to CPU computation (currently only `Concat`).
+    /// Reads a GPU buffer back to CPU as raw bytes. Kept available for
+    /// future operations that fall back to CPU computation, even though no
+    /// such fallback exists in the current set of WGSL shaders.
+    #[allow(dead_code)]
     fn read_buffer_bytes(&self, buffer: &wgpu::Buffer) -> Result<Vec<u8>, RuntimeError> {
         let size = buffer.size();
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -264,6 +280,364 @@ impl WgpuBackend {
             buffer: output_buffer,
             shape: output_shape.clone(),
         })
+    }
+
+    /// Dispatches a single-axis reduction (Mean or Variance) over an input tensor.
+    ///
+    /// Each output element corresponds to one "slot" — the cross-product of all
+    /// non-reduced axes — and the kernel sums (or sums-of-squares) over the
+    /// reduced axis sequentially.
+    fn dispatch_axis_reduction(
+        &self,
+        memo: &Memo<GpuTensor>,
+        asg_id: crate::asg::AsgId,
+        input_id: crate::asg::NodeId,
+        axis: usize,
+        _keepdims: bool,
+        output_shape: &Shape,
+        kind: AxisReductionKind,
+    ) -> Result<GpuTensor, RuntimeError> {
+        let x_t = Self::get_tensor(memo, asg_id, input_id)?;
+        let in_shape = &x_t.shape;
+        let rank = in_shape.len();
+        let reduce_len = in_shape[axis];
+
+        // outer = product of dims with index < axis, inner = product of dims with index > axis.
+        let outer: usize = in_shape[..axis].iter().product();
+        let inner: usize = in_shape[axis + 1..].iter().product();
+        let total_outputs = outer * inner;
+        let inv_n = 1.0_f32 / reduce_len as f32;
+
+        let kernel_body = match kind {
+            AxisReductionKind::Mean => "y[t] = sum * inv_n;".to_string(),
+            AxisReductionKind::Variance => {
+                // Two-pass: mean, then mean of squared deviations.
+                "let m = sum * inv_n;
+                 var sum_sq: f32 = 0.0;
+                 for (var k: u32 = 0u; k < L; k = k + 1u) {
+                     let v = x[base + k * inner_stride] - m;
+                     sum_sq = sum_sq + v * v;
+                 }
+                 y[t] = sum_sq * inv_n;"
+                    .to_string()
+            }
+        };
+
+        let shader = format!(
+            r#"
+            @group(0) @binding(0) var<storage, read> x: array<f32>;
+            @group(0) @binding(1) var<storage, read_write> y: array<f32>;
+
+            @compute @workgroup_size(64)
+            fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+                let t = id.x;
+                if (t >= {total_outputs}u) {{ return; }}
+                let inner = {inner}u;
+                let inner_stride = inner;
+                let L = {reduce_len}u;
+                let inv_n = {inv_n};
+
+                let outer_idx = t / inner;
+                let inner_idx = t % inner;
+                // The reduction axis has stride `inner` and the outer block has
+                // stride `inner * L`.
+                let base = outer_idx * (L * inner) + inner_idx;
+
+                var sum: f32 = 0.0;
+                for (var k: u32 = 0u; k < L; k = k + 1u) {{
+                    sum = sum + x[base + k * inner_stride];
+                }}
+                {kernel_body}
+            }}
+            "#,
+            total_outputs = total_outputs,
+            inner = inner,
+            reduce_len = reduce_len,
+            inv_n = inv_n,
+            kernel_body = kernel_body,
+        );
+
+        let _ = rank;
+        self.dispatch_shader(&shader, output_shape, &[x_t])
+    }
+
+    /// BatchNorm forward shader. One worker per output element; each worker
+    /// recomputes mean and variance for its channel by scanning the
+    /// non-channel axes. Slower than a two-pass implementation that caches
+    /// statistics, but correct and easy to read; an optimisation pass is on
+    /// the v0.5 wishlist.
+    fn dispatch_batch_norm(
+        &self,
+        memo: &Memo<GpuTensor>,
+        asg_id: crate::asg::AsgId,
+        input_id: crate::asg::NodeId,
+        gamma_id: crate::asg::NodeId,
+        beta_id: crate::asg::NodeId,
+        eps: f32,
+        channel_axis: usize,
+        output_shape: &Shape,
+    ) -> Result<GpuTensor, RuntimeError> {
+        let x_t = Self::get_tensor(memo, asg_id, input_id)?;
+        let g_t = Self::get_tensor(memo, asg_id, gamma_id)?;
+        let b_t = Self::get_tensor(memo, asg_id, beta_id)?;
+
+        let shape = &x_t.shape;
+        let total: usize = shape.iter().product();
+        let c = shape[channel_axis];
+        let per_channel = total / c;
+        let inv_n = 1.0_f32 / per_channel as f32;
+
+        // Stride of the channel axis in row-major layout.
+        let mut ch_stride = 1usize;
+        for &d in &shape[channel_axis + 1..] {
+            ch_stride *= d;
+        }
+
+        let shader = format!(
+            r#"
+            @group(0) @binding(0) var<storage, read> x: array<f32>;
+            @group(0) @binding(1) var<storage, read> gamma: array<f32>;
+            @group(0) @binding(2) var<storage, read> beta: array<f32>;
+            @group(0) @binding(3) var<storage, read_write> y: array<f32>;
+
+            @compute @workgroup_size(64)
+            fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+                let t = id.x;
+                if (t >= {total}u) {{ return; }}
+                let C = {c}u;
+                let CH_STRIDE = {ch_stride}u;
+                let inv_n = {inv_n};
+                let eps = {eps};
+                let total = {total}u;
+
+                let ch = (t / CH_STRIDE) % C;
+
+                // Per-channel mean and variance: scan every flat index whose
+                // channel slot equals `ch`.
+                var sum: f32 = 0.0;
+                var sum_sq: f32 = 0.0;
+                for (var i: u32 = 0u; i < total; i = i + 1u) {{
+                    if (((i / CH_STRIDE) % C) == ch) {{
+                        let v = x[i];
+                        sum = sum + v;
+                        sum_sq = sum_sq + v * v;
+                    }}
+                }}
+                let mean = sum * inv_n;
+                let var_ = sum_sq * inv_n - mean * mean;
+                let inv_std = 1.0 / sqrt(var_ + eps);
+
+                let xn = (x[t] - mean) * inv_std;
+                y[t] = xn * gamma[ch] + beta[ch];
+            }}
+            "#,
+            total = total,
+            c = c,
+            ch_stride = ch_stride,
+            inv_n = inv_n,
+            eps = eps,
+        );
+
+        self.dispatch_shader(&shader, output_shape, &[x_t, g_t, b_t])
+    }
+
+    /// BatchNorm backward w.r.t. input. Same per-element structure as forward;
+    /// each worker recomputes the statistics for its channel before applying
+    /// the gradient formula
+    /// `dx = gamma * inv_std * (dy - mean(dy) - x_norm * mean(dy * x_norm))`.
+    fn dispatch_batch_norm_backward(
+        &self,
+        memo: &Memo<GpuTensor>,
+        asg_id: crate::asg::AsgId,
+        grad_id: crate::asg::NodeId,
+        input_id: crate::asg::NodeId,
+        gamma_id: crate::asg::NodeId,
+        eps: f32,
+        channel_axis: usize,
+        output_shape: &Shape,
+    ) -> Result<GpuTensor, RuntimeError> {
+        let dy_t = Self::get_tensor(memo, asg_id, grad_id)?;
+        let x_t = Self::get_tensor(memo, asg_id, input_id)?;
+        let g_t = Self::get_tensor(memo, asg_id, gamma_id)?;
+
+        let shape = &x_t.shape;
+        let total: usize = shape.iter().product();
+        let c = shape[channel_axis];
+        let per_channel = total / c;
+        let inv_n = 1.0_f32 / per_channel as f32;
+
+        let mut ch_stride = 1usize;
+        for &d in &shape[channel_axis + 1..] {
+            ch_stride *= d;
+        }
+
+        let shader = format!(
+            r#"
+            @group(0) @binding(0) var<storage, read> dy: array<f32>;
+            @group(0) @binding(1) var<storage, read> x: array<f32>;
+            @group(0) @binding(2) var<storage, read> gamma: array<f32>;
+            @group(0) @binding(3) var<storage, read_write> dx: array<f32>;
+
+            @compute @workgroup_size(64)
+            fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+                let t = id.x;
+                if (t >= {total}u) {{ return; }}
+                let C = {c}u;
+                let CH_STRIDE = {ch_stride}u;
+                let inv_n = {inv_n};
+                let eps = {eps};
+                let total = {total}u;
+
+                let ch = (t / CH_STRIDE) % C;
+
+                var sum: f32 = 0.0;
+                var sum_sq: f32 = 0.0;
+                var sum_dy: f32 = 0.0;
+                var sum_dy_x: f32 = 0.0;
+                for (var i: u32 = 0u; i < total; i = i + 1u) {{
+                    if (((i / CH_STRIDE) % C) == ch) {{
+                        let v = x[i];
+                        sum = sum + v;
+                        sum_sq = sum_sq + v * v;
+                        sum_dy = sum_dy + dy[i];
+                        sum_dy_x = sum_dy_x + dy[i] * v;
+                    }}
+                }}
+                let mean = sum * inv_n;
+                let var_ = sum_sq * inv_n - mean * mean;
+                let inv_std = 1.0 / sqrt(var_ + eps);
+                // mean(dy * x_norm) = (sum(dy * x) - mean * sum(dy)) * inv_n * inv_std.
+                let mean_dy = sum_dy * inv_n;
+                let mean_dy_xn = (sum_dy_x - mean * sum_dy) * inv_n * inv_std;
+
+                let xn = (x[t] - mean) * inv_std;
+                dx[t] = gamma[ch] * inv_std * (dy[t] - mean_dy - xn * mean_dy_xn);
+            }}
+            "#,
+            total = total,
+            c = c,
+            ch_stride = ch_stride,
+            inv_n = inv_n,
+            eps = eps,
+        );
+
+        self.dispatch_shader(&shader, output_shape, &[dy_t, x_t, g_t])
+    }
+
+    /// `grad_gamma[c]` or `grad_beta[c]`. One worker per output channel,
+    /// each worker scans the input/grad arrays.
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_batch_norm_grad_param(
+        &self,
+        memo: &Memo<GpuTensor>,
+        asg_id: crate::asg::AsgId,
+        grad_id: crate::asg::NodeId,
+        input_id: Option<crate::asg::NodeId>,
+        eps: f32,
+        channel_axis: usize,
+        output_shape: &Shape,
+        kind: BatchNormGradKind,
+    ) -> Result<GpuTensor, RuntimeError> {
+        let dy_t = Self::get_tensor(memo, asg_id, grad_id)?;
+        let shape = &dy_t.shape;
+        let total: usize = shape.iter().product();
+        let c = shape[channel_axis];
+        let per_channel = total / c;
+        let inv_n = 1.0_f32 / per_channel as f32;
+
+        let mut ch_stride = 1usize;
+        for &d in &shape[channel_axis + 1..] {
+            ch_stride *= d;
+        }
+
+        let shader = match kind {
+            BatchNormGradKind::Gamma => {
+                let _ = input_id; // Required, used as binding 1.
+                format!(
+                    r#"
+                    @group(0) @binding(0) var<storage, read> dy: array<f32>;
+                    @group(0) @binding(1) var<storage, read> x: array<f32>;
+                    @group(0) @binding(2) var<storage, read_write> grad_gamma: array<f32>;
+
+                    @compute @workgroup_size(64)
+                    fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+                        let ch = id.x;
+                        if (ch >= {c}u) {{ return; }}
+                        let C = {c}u;
+                        let CH_STRIDE = {ch_stride}u;
+                        let inv_n = {inv_n};
+                        let eps = {eps};
+                        let total = {total}u;
+
+                        // Mean and variance for `ch`.
+                        var sum: f32 = 0.0;
+                        var sum_sq: f32 = 0.0;
+                        for (var i: u32 = 0u; i < total; i = i + 1u) {{
+                            if (((i / CH_STRIDE) % C) == ch) {{
+                                sum = sum + x[i];
+                                sum_sq = sum_sq + x[i] * x[i];
+                            }}
+                        }}
+                        let mean = sum * inv_n;
+                        let var_ = sum_sq * inv_n - mean * mean;
+                        let inv_std = 1.0 / sqrt(var_ + eps);
+
+                        var acc: f32 = 0.0;
+                        for (var i: u32 = 0u; i < total; i = i + 1u) {{
+                            if (((i / CH_STRIDE) % C) == ch) {{
+                                let xn = (x[i] - mean) * inv_std;
+                                acc = acc + dy[i] * xn;
+                            }}
+                        }}
+                        grad_gamma[ch] = acc;
+                    }}
+                    "#,
+                    c = c,
+                    ch_stride = ch_stride,
+                    inv_n = inv_n,
+                    eps = eps,
+                    total = total,
+                )
+            }
+            BatchNormGradKind::Beta => format!(
+                r#"
+                @group(0) @binding(0) var<storage, read> dy: array<f32>;
+                @group(0) @binding(1) var<storage, read_write> grad_beta: array<f32>;
+
+                @compute @workgroup_size(64)
+                fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+                    let ch = id.x;
+                    if (ch >= {c}u) {{ return; }}
+                    let C = {c}u;
+                    let CH_STRIDE = {ch_stride}u;
+                    let total = {total}u;
+
+                    var acc: f32 = 0.0;
+                    for (var i: u32 = 0u; i < total; i = i + 1u) {{
+                        if (((i / CH_STRIDE) % C) == ch) {{
+                            acc = acc + dy[i];
+                        }}
+                    }}
+                    grad_beta[ch] = acc;
+                }}
+                "#,
+                c = c,
+                ch_stride = ch_stride,
+                total = total,
+            ),
+        };
+
+        match kind {
+            BatchNormGradKind::Gamma => {
+                let x_t = Self::get_tensor(
+                    memo,
+                    asg_id,
+                    input_id.expect("BatchNormGradGamma requires input"),
+                )?;
+                self.dispatch_rowwise(&shader, output_shape, c, &[dy_t, x_t])
+            }
+            BatchNormGradKind::Beta => self.dispatch_rowwise(&shader, output_shape, c, &[dy_t]),
+        }
     }
 
     fn dispatch_shader(
@@ -1170,38 +1544,42 @@ impl Backend for WgpuBackend {
                     dilation,
                     groups,
                 } => {
-                    if *groups != 1 {
-                        return Err(RuntimeError::UnimplementedOperation(
-                            "Conv2d with groups != 1 not yet supported on GPU".to_string(),
-                        ));
-                    }
-                    if *dilation != (1, 1) {
-                        return Err(RuntimeError::UnimplementedOperation(
-                            "Conv2d with dilation != (1,1) not yet supported on GPU".to_string(),
-                        ));
-                    }
-
                     let input_tensor = Self::get_tensor(&memo, main_asg.id, *input)?;
                     let weight_tensor = Self::get_tensor(&memo, main_asg.id, *weight)?;
 
                     // Input: [N, C_in, H_in, W_in]
-                    // Weight: [C_out, C_in, kH, kW]
+                    // Weight (grouped): [C_out, C_in/groups, kH, kW]
                     // Output: [N, C_out, H_out, W_out]
                     let batch_size = input_tensor.shape[0];
                     let in_channels = input_tensor.shape[1];
                     let in_h = input_tensor.shape[2];
                     let in_w = input_tensor.shape[3];
                     let out_channels = weight_tensor.shape[0];
+                    let c_in_per_group = weight_tensor.shape[1];
                     let kernel_h = weight_tensor.shape[2];
                     let kernel_w = weight_tensor.shape[3];
                     let (stride_h, stride_w) = stride;
                     let (pad_h, pad_w) = padding;
-                    let out_h = (in_h + 2 * pad_h - kernel_h) / stride_h + 1;
-                    let out_w = (in_w + 2 * pad_w - kernel_w) / stride_w + 1;
+                    let (dil_h, dil_w) = dilation;
+                    let groups = *groups;
+
+                    if in_channels % groups != 0 || out_channels % groups != 0 {
+                        return Err(RuntimeError::ShapeError(format!(
+                            "Conv2d: in_channels ({}) and out_channels ({}) must both be divisible by groups ({})",
+                            in_channels, out_channels, groups
+                        )));
+                    }
+                    let out_channels_per_group = out_channels / groups;
+
+                    // Effective kernel size with dilation.
+                    let eff_kh = (kernel_h - 1) * dil_h + 1;
+                    let eff_kw = (kernel_w - 1) * dil_w + 1;
+                    let out_h = (in_h + 2 * pad_h - eff_kh) / stride_h + 1;
+                    let out_w = (in_w + 2 * pad_w - eff_kw) / stride_w + 1;
 
                     let output_size = batch_size * out_channels * out_h * out_w;
 
-                    // Build WGSL shader for direct convolution
+                    // Build WGSL shader for direct convolution with groups + dilation.
                     let shader = format!(
                         r#"
                         @group(0) @binding(0) var<storage, read> input: array<f32>;
@@ -1213,8 +1591,7 @@ impl Backend for WgpuBackend {
                             let out_idx = id.x;
                             if (out_idx >= {output_size}u) {{ return; }}
 
-                            // Decode output index: [n, oc, oh, ow]
-                            let N = {batch_size}u;
+                            // Decode output index: [n, oc, oh, ow].
                             let C_out = {out_channels}u;
                             let H_out = {out_h}u;
                             let W_out = {out_w}u;
@@ -1227,25 +1604,39 @@ impl Backend for WgpuBackend {
                             let stride_w = {stride_w}u;
                             let pad_h = {pad_h}u;
                             let pad_w = {pad_w}u;
+                            let dil_h = {dil_h}u;
+                            let dil_w = {dil_w}u;
+                            let groups = {groups}u;
+                            let C_in_per_group = {c_in_per_group}u;
+                            let C_out_per_group = {out_channels_per_group}u;
 
                             let ow = out_idx % W_out;
                             let oh = (out_idx / W_out) % H_out;
                             let oc = (out_idx / (W_out * H_out)) % C_out;
-                            let n = out_idx / (W_out * H_out * C_out);
+                            let n  = out_idx / (W_out * H_out * C_out);
+
+                            // Each output channel oc belongs to one group g = oc / C_out_per_group;
+                            // it consumes input channels [g * C_in_per_group, (g+1) * C_in_per_group).
+                            let g = oc / C_out_per_group;
+                            let ic_start = g * C_in_per_group;
 
                             var sum: f32 = 0.0;
-
-                            for (var ic = 0u; ic < C_in; ic = ic + 1u) {{
+                            for (var ic_rel = 0u; ic_rel < C_in_per_group; ic_rel = ic_rel + 1u) {{
+                                let ic = ic_start + ic_rel;
                                 for (var kh = 0u; kh < kH; kh = kh + 1u) {{
                                     for (var kw = 0u; kw < kW; kw = kw + 1u) {{
-                                        let ih_s = i32(oh * stride_h + kh) - i32(pad_h);
-                                        let iw_s = i32(ow * stride_w + kw) - i32(pad_w);
-
+                                        let ih_s = i32(oh * stride_h + kh * dil_h) - i32(pad_h);
+                                        let iw_s = i32(ow * stride_w + kw * dil_w) - i32(pad_w);
                                         if (ih_s >= 0 && ih_s < i32(H_in) && iw_s >= 0 && iw_s < i32(W_in)) {{
                                             let ih = u32(ih_s);
                                             let iw = u32(iw_s);
-                                            let input_idx = n * (C_in * H_in * W_in) + ic * (H_in * W_in) + ih * W_in + iw;
-                                            let weight_idx = oc * (C_in * kH * kW) + ic * (kH * kW) + kh * kW + kw;
+                                            let input_idx = n * (C_in * H_in * W_in)
+                                                          + ic * (H_in * W_in)
+                                                          + ih * W_in + iw;
+                                            // Weight layout: [C_out, C_in_per_group, kH, kW].
+                                            let weight_idx = oc * (C_in_per_group * kH * kW)
+                                                           + ic_rel * (kH * kW)
+                                                           + kh * kW + kw;
                                             sum = sum + input[input_idx] * weight[weight_idx];
                                         }}
                                     }}
@@ -1256,7 +1647,6 @@ impl Backend for WgpuBackend {
                         }}
                         "#,
                         output_size = output_size,
-                        batch_size = batch_size,
                         out_channels = out_channels,
                         out_h = out_h,
                         out_w = out_w,
@@ -1269,6 +1659,11 @@ impl Backend for WgpuBackend {
                         stride_w = stride_w,
                         pad_h = pad_h,
                         pad_w = pad_w,
+                        dil_h = dil_h,
+                        dil_w = dil_w,
+                        groups = groups,
+                        c_in_per_group = c_in_per_group,
+                        out_channels_per_group = out_channels_per_group,
                     );
 
                     let module = self
@@ -1495,41 +1890,130 @@ impl Backend for WgpuBackend {
                 }
 
                 NodeType::Concat { inputs, axis } => {
-                    // CPU-side concat for now: ship each input back to CPU, stack, re-upload.
-                    // Slice-heavy RoPE concatenates only a few pairs so the data is tiny, but this
-                    // keeps us correct without a complex multi-input WGSL kernel.
-                    let mut arrays = Vec::with_capacity(inputs.len());
-                    for input_id in inputs {
-                        let t = Self::get_tensor(&memo, main_asg.id, *input_id)?;
-                        let bytes = self.read_buffer_bytes(&t.buffer)?;
-                        let f32_slice: &[f32] = bytemuck::cast_slice(&bytes);
-                        let arr =
-                            ndarray::ArrayD::from_shape_vec(t.shape.clone(), f32_slice.to_vec())
-                                .map_err(|e| {
-                                    RuntimeError::ShapeError(format!("Concat input: {}", e))
-                                })?;
-                        arrays.push(arr);
+                    // Native GPU concat: allocate one output buffer sized for the
+                    // full concatenation, then dispatch a per-input copy kernel
+                    // that writes each input into its slice of the output, offset
+                    // along `axis`. No CPU round-trip.
+                    let axis = *axis;
+                    let out_shape = shape.clone();
+                    let out_size: usize = out_shape.iter().product();
+                    let rank = out_shape.len();
+
+                    // Pre-compute output strides (row-major) once.
+                    let mut out_strides = vec![1_usize; rank];
+                    for i in (0..rank.saturating_sub(1)).rev() {
+                        out_strides[i] = out_strides[i + 1] * out_shape[i + 1];
                     }
-                    let views: Vec<_> = arrays.iter().map(|a| a.view()).collect();
-                    let out = ndarray::concatenate(ndarray::Axis(*axis), &views)
-                        .map_err(|e| RuntimeError::ShapeError(format!("Concat: {}", e)))?;
-                    let contiguous = out.as_standard_layout().to_owned();
-                    let slice = contiguous.as_slice().ok_or_else(|| {
-                        RuntimeError::MemoryError("Concat: could not get contiguous slice".into())
-                    })?;
-                    let bytes: &[u8] = bytemuck::cast_slice(slice);
-                    let buffer =
-                        self.device
-                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("concat_output"),
-                                contents: bytes,
-                                usage: wgpu::BufferUsages::STORAGE
-                                    | wgpu::BufferUsages::COPY_SRC
-                                    | wgpu::BufferUsages::COPY_DST,
+
+                    // Allocate output buffer.
+                    let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("concat_output"),
+                        size: (out_size.max(1) * std::mem::size_of::<f32>()) as u64,
+                        usage: wgpu::BufferUsages::STORAGE
+                            | wgpu::BufferUsages::COPY_SRC
+                            | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+
+                    // Walk inputs in order, copying each into its slice along `axis`.
+                    let mut axis_offset = 0_usize;
+                    for input_id in inputs {
+                        let src_t = Self::get_tensor(&memo, main_asg.id, *input_id)?;
+                        let src_shape = &src_t.shape;
+                        let src_size: usize = src_shape.iter().product();
+                        if src_size == 0 {
+                            continue;
+                        }
+
+                        // Per-input strides.
+                        let mut src_strides = vec![1_usize; rank];
+                        for i in (0..rank.saturating_sub(1)).rev() {
+                            src_strides[i] = src_strides[i + 1] * src_shape[i + 1];
+                        }
+
+                        let shader = format!(
+                            r#"
+                            @group(0) @binding(0) var<storage, read> src: array<f32>;
+                            @group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+
+                            @compute @workgroup_size(64)
+                            fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+                                let t = id.x;
+                                if (t >= {src_size}u) {{ return; }}
+                                let rank = {rank}u;
+                                var src_strides = array<u32, {rank}>({src_strides_init});
+                                var dst_strides = array<u32, {rank}>({dst_strides_init});
+                                let axis = {axis}u;
+                                let axis_offset = {axis_offset}u;
+
+                                var rem = t;
+                                var dst_flat: u32 = 0u;
+                                for (var k: u32 = 0u; k < rank; k = k + 1u) {{
+                                    let idx_k = rem / src_strides[k];
+                                    rem = rem - idx_k * src_strides[k];
+                                    let out_idx_k = select(idx_k, idx_k + axis_offset, k == axis);
+                                    dst_flat = dst_flat + out_idx_k * dst_strides[k];
+                                }}
+                                dst[dst_flat] = src[t];
+                            }}
+                            "#,
+                            src_size = src_size,
+                            rank = rank,
+                            axis = axis,
+                            axis_offset = axis_offset,
+                            src_strides_init = fmt_u32_array(&src_strides),
+                            dst_strides_init = fmt_u32_array(&out_strides),
+                        );
+
+                        // Build the pipeline + bind group + dispatch.
+                        let module =
+                            self.device
+                                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                                    label: Some("concat_copy_shader"),
+                                    source: wgpu::ShaderSource::Wgsl(shader.into()),
+                                });
+                        let pipeline =
+                            self.device
+                                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                                    label: Some("concat_copy_pipeline"),
+                                    layout: None,
+                                    module: &module,
+                                    entry_point: "main",
+                                });
+                        let layout = pipeline.get_bind_group_layout(0);
+                        let bind_group =
+                            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("concat_copy_bind_group"),
+                                layout: &layout,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: src_t.buffer.as_entire_binding(),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: output_buffer.as_entire_binding(),
+                                    },
+                                ],
                             });
+                        let mut encoder = self
+                            .device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                        let mut pass =
+                            encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+                        pass.set_pipeline(&pipeline);
+                        pass.set_bind_group(0, &bind_group, &[]);
+                        let groups = (src_size as u32).div_ceil(64);
+                        pass.dispatch_workgroups(groups.max(1), 1, 1);
+                        drop(pass);
+                        self.queue.submit(Some(encoder.finish()));
+
+                        axis_offset += src_shape[axis];
+                    }
+
                     GpuTensor {
-                        buffer,
-                        shape: shape.clone(),
+                        buffer: output_buffer,
+                        shape: out_shape,
                     }
                 }
 
@@ -2239,34 +2723,33 @@ impl Backend for WgpuBackend {
                     dilation,
                     groups,
                 } => {
-                    if *groups != 1 {
-                        return Err(RuntimeError::UnimplementedOperation(
-                            "Conv2dBackwardInput with groups != 1 not yet supported on GPU".into(),
-                        ));
-                    }
-                    if *dilation != (1, 1) {
-                        return Err(RuntimeError::UnimplementedOperation(
-                            "Conv2dBackwardInput with dilation != (1,1) not yet supported on GPU"
-                                .into(),
-                        ));
-                    }
-
                     let grad_t = Self::get_tensor(&memo, main_asg.id, *grad_output)?;
                     let w_t = Self::get_tensor(&memo, main_asg.id, *weight)?;
 
-                    let (n_batch, in_channels, in_h, in_w) = *input_shape;
+                    let (_n_batch, in_channels, in_h, in_w) = *input_shape;
                     let out_channels = grad_t.shape[1];
                     let out_h = grad_t.shape[2];
                     let out_w = grad_t.shape[3];
+                    let c_in_per_group = w_t.shape[1];
                     let kernel_h = w_t.shape[2];
                     let kernel_w = w_t.shape[3];
                     let (stride_h, stride_w) = *stride;
                     let (pad_h, pad_w) = *padding;
+                    let (dil_h, dil_w) = *dilation;
+                    let groups = *groups;
 
-                    let output_size = n_batch * in_channels * in_h * in_w;
+                    if in_channels % groups != 0 || out_channels % groups != 0 {
+                        return Err(RuntimeError::ShapeError(format!(
+                            "Conv2dBackwardInput: in_channels ({}) and out_channels ({}) must be divisible by groups ({})",
+                            in_channels, out_channels, groups
+                        )));
+                    }
+                    let out_channels_per_group = out_channels / groups;
+
+                    let output_size = _n_batch * in_channels * in_h * in_w;
 
                     // Each worker computes one grad_input[n, ic, ih, iw] by iterating over
-                    // the (oc, kh, kw) triples that contributed to this input position.
+                    // the (oc, kh, kw) triples within its group that contributed to it.
                     let shader = format!(
                         r#"
                         @group(0) @binding(0) var<storage, read> grad_out: array<f32>;
@@ -2288,39 +2771,51 @@ impl Backend for WgpuBackend {
                             let kW = {kernel_w}u;
                             let sh = {stride_h}i;
                             let sw = {stride_w}i;
+                            let dh = {dil_h}i;
+                            let dw = {dil_w}i;
                             let ph = {pad_h}i;
                             let pw = {pad_w}i;
+                            let C_in_per_group = {c_in_per_group}u;
+                            let C_out_per_group = {out_channels_per_group}u;
 
                             let iw = idx % W_in;
                             let ih = (idx / W_in) % H_in;
                             let ic = (idx / (W_in * H_in)) % C_in;
                             let n  = idx / (W_in * H_in * C_in);
 
+                            // Determine which group this input channel belongs to and
+                            // restrict the oc loop to that group's output channels.
+                            let g = ic / C_in_per_group;
+                            let ic_rel = ic - g * C_in_per_group;
+                            let oc_start = g * C_out_per_group;
+                            let oc_end = oc_start + C_out_per_group;
+
                             var acc: f32 = 0.0;
 
                             // For each kernel position, find matching (oh, ow) such that
-                            //   oh*stride + kh - pad == ih  and  ow*stride + kw - pad == iw.
+                            //   oh*sh + kh*dh - ph == ih  and  ow*sw + kw*dw - pw == iw.
                             for (var kh: u32 = 0u; kh < kH; kh = kh + 1u) {{
-                                let oh_num = i32(ih) + ph - i32(kh);
+                                let oh_num = i32(ih) + ph - i32(kh) * dh;
                                 if (oh_num < 0) {{ continue; }}
                                 if ((oh_num % sh) != 0) {{ continue; }}
                                 let oh = oh_num / sh;
                                 if (oh < 0 || oh >= i32(H_out)) {{ continue; }}
 
                                 for (var kw: u32 = 0u; kw < kW; kw = kw + 1u) {{
-                                    let ow_num = i32(iw) + pw - i32(kw);
+                                    let ow_num = i32(iw) + pw - i32(kw) * dw;
                                     if (ow_num < 0) {{ continue; }}
                                     if ((ow_num % sw) != 0) {{ continue; }}
                                     let ow = ow_num / sw;
                                     if (ow < 0 || ow >= i32(W_out)) {{ continue; }}
 
-                                    for (var oc: u32 = 0u; oc < C_out; oc = oc + 1u) {{
+                                    for (var oc: u32 = oc_start; oc < oc_end; oc = oc + 1u) {{
                                         let g_idx = n * (C_out * H_out * W_out)
                                                   + oc * (H_out * W_out)
                                                   + u32(oh) * W_out
                                                   + u32(ow);
-                                        let w_idx = oc * (C_in * kH * kW)
-                                                  + ic * (kH * kW)
+                                        // Weight layout: [C_out, C_in_per_group, kH, kW].
+                                        let w_idx = oc * (C_in_per_group * kH * kW)
+                                                  + ic_rel * (kH * kW)
                                                   + kh * kW
                                                   + kw;
                                         acc = acc + grad_out[g_idx] * weight[w_idx];
@@ -2342,8 +2837,12 @@ impl Backend for WgpuBackend {
                         kernel_w = kernel_w,
                         stride_h = stride_h,
                         stride_w = stride_w,
+                        dil_h = dil_h,
+                        dil_w = dil_w,
                         pad_h = pad_h,
                         pad_w = pad_w,
+                        c_in_per_group = c_in_per_group,
+                        out_channels_per_group = out_channels_per_group,
                     );
 
                     self.dispatch_shader(&shader, shape, &[grad_t, w_t])?
@@ -2358,29 +2857,28 @@ impl Backend for WgpuBackend {
                     dilation,
                     groups,
                 } => {
-                    if *groups != 1 {
-                        return Err(RuntimeError::UnimplementedOperation(
-                            "Conv2dBackwardWeight with groups != 1 not yet supported on GPU".into(),
-                        ));
-                    }
-                    if *dilation != (1, 1) {
-                        return Err(RuntimeError::UnimplementedOperation(
-                            "Conv2dBackwardWeight with dilation != (1,1) not yet supported on GPU"
-                                .into(),
-                        ));
-                    }
-
                     let grad_t = Self::get_tensor(&memo, main_asg.id, *grad_output)?;
                     let x_t = Self::get_tensor(&memo, main_asg.id, *input)?;
 
                     let (out_channels, c_in_per_group, kernel_h, kernel_w) = *weight_shape;
                     let n_batch = x_t.shape[0];
+                    let total_in_channels = x_t.shape[1];
                     let in_h = x_t.shape[2];
                     let in_w = x_t.shape[3];
                     let out_h = grad_t.shape[2];
                     let out_w = grad_t.shape[3];
                     let (stride_h, stride_w) = *stride;
                     let (pad_h, pad_w) = *padding;
+                    let (dil_h, dil_w) = *dilation;
+                    let groups = *groups;
+
+                    if total_in_channels % groups != 0 || out_channels % groups != 0 {
+                        return Err(RuntimeError::ShapeError(format!(
+                            "Conv2dBackwardWeight: in_channels ({}) and out_channels ({}) must be divisible by groups ({})",
+                            total_in_channels, out_channels, groups
+                        )));
+                    }
+                    let out_channels_per_group = out_channels / groups;
 
                     let output_size = out_channels * c_in_per_group * kernel_h * kernel_w;
 
@@ -2396,7 +2894,9 @@ impl Backend for WgpuBackend {
                             if (idx >= {output_size}u) {{ return; }}
 
                             let C_out = {out_channels}u;
-                            let C_in = {c_in}u;
+                            let C_in_total = {total_in_channels}u;
+                            let C_in_per_group = {c_in_per_group}u;
+                            let C_out_per_group = {out_channels_per_group}u;
                             let H_in = {in_h}u;
                             let W_in = {in_w}u;
                             let H_out = {out_h}u;
@@ -2406,30 +2906,33 @@ impl Backend for WgpuBackend {
                             let N = {n_batch}u;
                             let sh = {stride_h}u;
                             let sw = {stride_w}u;
+                            let dh = {dil_h}u;
+                            let dw = {dil_w}u;
                             let ph = {pad_h}i;
                             let pw = {pad_w}i;
 
+                            // Decode (oc, ic_rel, kh, kw) from flat idx.
                             let kw = idx % kW;
                             let kh = (idx / kW) % kH;
-                            let ic = (idx / (kW * kH)) % C_in;
-                            let oc = idx / (kW * kH * C_in);
+                            let ic_rel = (idx / (kW * kH)) % C_in_per_group;
+                            let oc = idx / (kW * kH * C_in_per_group);
+                            let g = oc / C_out_per_group;
+                            let ic = g * C_in_per_group + ic_rel;
 
                             var acc: f32 = 0.0;
                             for (var n: u32 = 0u; n < N; n = n + 1u) {{
                                 for (var oh: u32 = 0u; oh < H_out; oh = oh + 1u) {{
-                                    let ih_s = i32(oh * sh) + i32(kh) - ph;
+                                    let ih_s = i32(oh * sh) + i32(kh * dh) - ph;
                                     if (ih_s < 0 || ih_s >= i32(H_in)) {{ continue; }}
                                     for (var ow: u32 = 0u; ow < W_out; ow = ow + 1u) {{
-                                        let iw_s = i32(ow * sw) + i32(kw) - pw;
+                                        let iw_s = i32(ow * sw) + i32(kw * dw) - pw;
                                         if (iw_s < 0 || iw_s >= i32(W_in)) {{ continue; }}
                                         let g_idx = n * (C_out * H_out * W_out)
                                                   + oc * (H_out * W_out)
-                                                  + oh * W_out
-                                                  + ow;
-                                        let x_idx = n * (C_in * H_in * W_in)
+                                                  + oh * W_out + ow;
+                                        let x_idx = n * (C_in_total * H_in * W_in)
                                                   + ic * (H_in * W_in)
-                                                  + u32(ih_s) * W_in
-                                                  + u32(iw_s);
+                                                  + u32(ih_s) * W_in + u32(iw_s);
                                         acc = acc + grad_out[g_idx] * x[x_idx];
                                     }}
                                 }}
@@ -2439,7 +2942,9 @@ impl Backend for WgpuBackend {
                         "#,
                         output_size = output_size,
                         out_channels = out_channels,
-                        c_in = c_in_per_group,
+                        total_in_channels = total_in_channels,
+                        c_in_per_group = c_in_per_group,
+                        out_channels_per_group = out_channels_per_group,
                         in_h = in_h,
                         in_w = in_w,
                         out_h = out_h,
@@ -2449,6 +2954,8 @@ impl Backend for WgpuBackend {
                         n_batch = n_batch,
                         stride_h = stride_h,
                         stride_w = stride_w,
+                        dil_h = dil_h,
+                        dil_w = dil_w,
                         pad_h = pad_h,
                         pad_w = pad_w,
                     );
@@ -2679,6 +3186,146 @@ impl Backend for WgpuBackend {
 
                     self.dispatch_rowwise(&shader, shape, norm_size, &[dy_t])?
                 }
+
+                NodeType::BatchNorm {
+                    input,
+                    gamma,
+                    beta,
+                    eps,
+                    channel_axis,
+                } => self.dispatch_batch_norm(
+                    &memo,
+                    main_asg.id,
+                    *input,
+                    *gamma,
+                    *beta,
+                    *eps,
+                    *channel_axis,
+                    shape,
+                )?,
+
+                NodeType::BatchNormBackward {
+                    grad_output,
+                    input,
+                    gamma,
+                    eps,
+                    channel_axis,
+                } => self.dispatch_batch_norm_backward(
+                    &memo,
+                    main_asg.id,
+                    *grad_output,
+                    *input,
+                    *gamma,
+                    *eps,
+                    *channel_axis,
+                    shape,
+                )?,
+
+                NodeType::BatchNormGradGamma {
+                    grad_output,
+                    input,
+                    eps,
+                    channel_axis,
+                } => self.dispatch_batch_norm_grad_param(
+                    &memo,
+                    main_asg.id,
+                    *grad_output,
+                    Some(*input),
+                    *eps,
+                    *channel_axis,
+                    shape,
+                    BatchNormGradKind::Gamma,
+                )?,
+
+                NodeType::BatchNormGradBeta {
+                    grad_output,
+                    channel_axis,
+                } => self.dispatch_batch_norm_grad_param(
+                    &memo,
+                    main_asg.id,
+                    *grad_output,
+                    None,
+                    0.0,
+                    *channel_axis,
+                    shape,
+                    BatchNormGradKind::Beta,
+                )?,
+
+                NodeType::DropoutMask { shape_provider, p } => {
+                    let provider = Self::get_tensor(&memo, main_asg.id, *shape_provider)?;
+                    let total: usize = provider.shape.iter().product();
+                    let p_val = *p;
+                    let scale = 1.0_f32 / (1.0 - p_val);
+
+                    // Per-thread PRNG seed: mix the dispatch seed with the global id.
+                    // Re-sample on every run by seeding from std::time::SystemTime.
+                    let dispatch_seed = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(0xC0FFEE);
+                    let seed_lo = dispatch_seed as u32;
+                    let seed_hi = (dispatch_seed >> 32) as u32;
+
+                    // PCG-style hash from `https://www.pcg-random.org/`.
+                    // Output is uniform [0, 1); we drop with prob `p`.
+                    let shader = format!(
+                        r#"
+                        @group(0) @binding(0) var<storage, read_write> y: array<f32>;
+
+                        fn pcg_hash(input: u32) -> u32 {{
+                            var state = input * 747796405u + 2891336453u;
+                            var word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+                            return (word >> 22u) ^ word;
+                        }}
+
+                        @compute @workgroup_size(64)
+                        fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+                            let t = id.x;
+                            if (t >= {total}u) {{ return; }}
+                            let mixed = t ^ {seed_lo}u ^ ({seed_hi}u * 16777619u);
+                            let h = pcg_hash(mixed);
+                            // 24-bit float in [0, 1) — enough resolution for a Bernoulli mask.
+                            let r = f32(h >> 8u) * (1.0 / 16777216.0);
+                            y[t] = select({scale}, 0.0, r < {p_val});
+                        }}
+                        "#,
+                        total = total,
+                        seed_lo = seed_lo,
+                        seed_hi = seed_hi,
+                        p_val = p_val,
+                        scale = scale,
+                    );
+
+                    self.dispatch_shader(&shader, shape, &[provider])?
+                }
+
+                NodeType::MeanAxis {
+                    input,
+                    axis,
+                    keepdims,
+                } => self.dispatch_axis_reduction(
+                    &memo,
+                    main_asg.id,
+                    *input,
+                    *axis,
+                    *keepdims,
+                    shape,
+                    AxisReductionKind::Mean,
+                )?,
+
+                NodeType::VarianceAxis {
+                    input,
+                    axis,
+                    keepdims,
+                } => self.dispatch_axis_reduction(
+                    &memo,
+                    main_asg.id,
+                    *input,
+                    *axis,
+                    *keepdims,
+                    shape,
+                    AxisReductionKind::Variance,
+                )?,
 
                 _ => {
                     return Err(RuntimeError::UnimplementedOperation(format!(
