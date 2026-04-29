@@ -4,6 +4,11 @@
 //! Compared to v0.2 this binary no longer enumerates parameter shapes by
 //! string matching — shapes come from `GraphContext::build_shape_map()` and
 //! initial weights from `GraphContext::init_parameters()`.
+//!
+//! When started with `--visualize`, an interactive `egui` window opens that
+//! displays the model graph in real time and exposes a node inspector.
+//! Choose the GUI language at startup with `--lang en` (default) or
+//! `--lang ru`.
 
 mod gui_viewer;
 
@@ -18,7 +23,7 @@ use rustyasg::runtime::cpu_backend::CpuBackend;
 use rustyasg::runtime::wgpu_backend::WgpuBackend;
 use rustyasg::tensor::{GraphContext, Tensor};
 
-use crate::gui_viewer::GraphViewerApp;
+use crate::gui_viewer::{ComputeUpdate, GraphViewerApp, Lang};
 
 use clap::Parser;
 use eframe::egui;
@@ -42,13 +47,26 @@ struct Args {
     /// Use GPU (wgpu) backend. Default: CPU.
     #[arg(long)]
     gpu: bool,
+
+    /// GUI language. Accepts `en` / `english` / `ru` / `russian`. Default: en.
+    /// Only relevant together with `--visualize`.
+    #[arg(long, default_value = "en")]
+    lang: String,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     if args.visualize {
-        let (tx, rx) = mpsc::channel();
+        let lang = Lang::parse(&args.lang).unwrap_or_else(|| {
+            eprintln!(
+                "Unknown --lang value '{}', falling back to English. Try `en` or `ru`.",
+                args.lang
+            );
+            Lang::En
+        });
+
+        let (tx, rx) = mpsc::channel::<ComputeUpdate>();
         let use_gpu = args.gpu;
         thread::spawn(move || {
             println!("[COMPUTATION] Starting computation thread...");
@@ -56,7 +74,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("[COMPUTATION] Error: {}", e);
             }
         });
-        println!("[GUI] Starting GUI on main thread...");
+        println!(
+            "[GUI] Starting GUI on main thread (language: {:?})...",
+            lang
+        );
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
             ..Default::default()
@@ -64,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eframe::run_native(
             "RustyASG — Graph Visualizer",
             options,
-            Box::new(|cc| Ok(Box::new(GraphViewerApp::new(cc, rx)))),
+            Box::new(move |cc| Ok(Box::new(GraphViewerApp::new(cc, rx, lang)))),
         )?;
     } else {
         run_computation(None, args.gpu)?;
@@ -74,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Builds a TransformerBlock, computes its gradient graph, and trains it.
 fn run_computation(
-    tx: Option<mpsc::Sender<asg::Asg>>,
+    tx: Option<mpsc::Sender<ComputeUpdate>>,
     use_gpu: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // ---------- 1. Model hyper-parameters ----------
@@ -127,9 +148,9 @@ fn run_computation(
     println!("[3] Gradient graph built and analyzed.");
 
     // ---------- 5. Send forward graph to GUI (if enabled) ----------
-    if let Some(tx) = tx {
+    if let Some(tx) = &tx {
         println!("\n[+] Sending forward graph to visualizer...");
-        tx.send(forward_graph.clone())?;
+        tx.send(ComputeUpdate::GraphReady(forward_graph.clone()))?;
     }
 
     // ---------- 6. Initial runtime data ----------
@@ -165,6 +186,7 @@ fn run_computation(
             runtime_data,
             param_tensors,
             optimizer,
+            tx,
         );
     } else {
         let backend = CpuBackend::new();
@@ -175,6 +197,7 @@ fn run_computation(
             runtime_data,
             param_tensors,
             optimizer,
+            tx,
         );
     }
 
@@ -188,6 +211,7 @@ fn run_training_loop<B: Backend>(
     mut runtime_data: HashMap<String, Value>,
     param_tensors: Vec<Tensor>,
     mut optimizer: Sgd,
+    update_tx: Option<mpsc::Sender<ComputeUpdate>>,
 ) {
     let param_names: Vec<String> = param_tensors
         .iter()
@@ -240,13 +264,16 @@ fn run_training_loop<B: Backend>(
         // 7.5. Optimizer step.
         optimizer.step(&mut runtime_data, &computed_grads);
 
-        // 7.6. Log loss.
+        // 7.6. Log loss + push to GUI.
         if let Value::Tensor(loss_tensor) = loss_value {
-            println!(
-                "Epoch: {:<2}, Loss: {:.6}",
-                epoch + 1,
-                loss_tensor.first().unwrap_or(&-1.0)
-            );
+            let scalar = *loss_tensor.first().unwrap_or(&-1.0);
+            println!("Epoch: {:<2}, Loss: {:.6}", epoch + 1, scalar);
+            if let Some(tx) = &update_tx {
+                let _ = tx.send(ComputeUpdate::EpochDone {
+                    epoch: epoch + 1,
+                    loss: scalar,
+                });
+            }
         }
     }
 

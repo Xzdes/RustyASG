@@ -5,11 +5,14 @@ heading next.
 
 ## Current status
 
-RustyASG v0.3.1 is a polished, published-ready crate. The library is
-clippy-clean under `-D warnings`, rustdoc builds strictly with
+RustyASG v0.4.1 ships **Phase A** of the **Interactive Model Lab** — the
+live `egui` graph viewer is now an educational diagnostic tool that
+explains every node's purpose, formula, and role in the model in plain
+English or Russian. The library is clippy-clean under `-D warnings`,
+rustdoc builds strictly with
 `RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links"`, and the full test
-suite (141 tests: 87 lib + 46 GPU + 8 grad check) is green on every
-supported platform in CI.
+suite (150 tests: 93 lib + 48 GPU + 9 grad check, plus 2 ignored
+diagnostic tests) is green on every supported platform in CI.
 
 ## Implemented
 
@@ -147,6 +150,48 @@ supported platform in CI.
 
 ## Release history
 
+### v0.4.1 — Phase A: Interactive Model Lab (read-only) (April 2026)
+- **Educational Node Inspector.** Click any node in the live graph viewer
+  → side panel explains *what* the operation does, the *formula*, *why*
+  it shows up in real models, and — for parameters — the *role* in this
+  specific model (γ/β of LayerNorm, Q/K/V projections, weight matrix
+  initialisation, …). Plain English or Russian, selected at startup with
+  `--lang en|ru`. Coverage: every `NodeType` produced by current layers,
+  including all gradient-only ops.
+- **Live loss chart.** Bottom panel auto-renders an XY plot of training
+  loss vs. epoch, auto-rescaling on min/max, updated as the compute
+  thread emits `EpochDone`.
+- **Edge highlighting + per-category color coding.** Selected node's
+  incident edges get amber highlight; nodes are filled by category
+  (parameter / input / activation / arithmetic / reduction /
+  normalisation / convolution / pooling / shape op / gradient op /
+  output).
+- **Two-language UI.** New `--lang en|ru` CLI flag — every label and
+  description has a parallel translation in `tr()`.
+- **`ComputeUpdate` channel protocol.** Typed `GraphReady` / `EpochDone`
+  enum replaces the raw `Asg` send; future phases will add a reverse
+  `GuiCommand` channel for mutations.
+- Library API unchanged — purely additive release.
+
+### v0.4.0 — Phase 7: Fix what was broken (April 2026)
+- **Real `Dropout`.** Previously a no-op; now a `NodeType::DropoutMask`
+  that samples Bernoulli on every forward run, with the mask cached in
+  `forward_memo` so backward sees the same values via the standard
+  `Multiply` rule.
+- **Correct `BatchNorm`.** Previously reduced over the *last* axis (via
+  `Tensor::mean`); now a specialised `NodeType::BatchNorm` reduces over
+  every axis except `channel_axis`. Forward, backward, `grad_gamma`,
+  `grad_beta` are all hand-verified by unit tests.
+- **Native GPU `Concat`.** Previously round-tripped through CPU; now a
+  multi-dispatch WGSL kernel that copies each input into its slice of
+  the output buffer with per-axis offset arithmetic.
+- **Full GPU `Conv2d`.** Forward and both backward kernels now support
+  `groups > 1` (depthwise / grouped convolutions) and `dilation > 1`
+  (dilated convolutions). New parity tests cover both regimes.
+- New ASG primitives: `DropoutMask`, `MeanAxis`, `VarianceAxis`,
+  `BatchNorm`/`Backward`/`GradGamma`/`GradBeta`. CPU + GPU + autograd.
+- 9 new tests; full suite at 150 green.
+
 ### v0.3.1 — Pre-release polish (April 2026)
 - `cargo fmt` applied across the full tree.
 - `cargo clippy --all-targets -- -D warnings` clean everywhere; library
@@ -230,10 +275,130 @@ SafeTensors, interactive visualiser.
   library code with typed `RustyAsgError`.
 - **Criterion benchmarks.** Measured comparisons against Burn and
   Candle on representative workloads.
-- **Tiny GPT block.** End-to-end GPT-style example (needs causal
-  masking + multi-batch training).
+- **Tiny GPT block.** End-to-end GPT-style example. Blocked on a
+  `MultiHeadAttention` refactor — current `split_heads` hardcodes
+  `batch=1, seq_len=1` via a literal `reshape(vec![1, 1, num_heads,
+  head_dim])`. Need dynamic shape support.
 - **Vision Transformer starter.** Patch embedding + TransformerBlock
   stack.
+
+## Planned for v0.6+ — Interactive Model Lab
+
+This is the direction that uses RustyASG's **single biggest unique
+advantage** — the ASG is a first-class object that can be edited at
+runtime, and we already render it live with `egui`. No other Rust DL
+framework can do this; PyTorch can't either (TensorBoard is read-only).
+The vision: turn RustyASG into a node-based visual ML lab — drop a
+graph node, wire it up, see the model retrain on the fly.
+
+Implementation is split into five phases of increasing scope. Each
+phase is independently shippable and adds visible value.
+
+### Phase A — Read-only inspection ✅ DONE (v0.4.1, April 2026)
+Foundation work: make the visualiser a real diagnostic tool, not just a
+structure-renderer.
+- ✅ **Click on a node** opens a side panel with type, shape, dtype,
+  parameter name, graph-output flag, and a list of inputs.
+- ✅ **Educational descriptions** (Phase A++): the side panel explains
+  *what* the operation does, the *formula*, *why* it shows up in real
+  models, and — for parameters — the *role* in this specific model
+  (`mha.w_q` → "Query projection of Multi-Head Attention", `norm1.gamma`
+  → "Learnable scale γ of LayerNorm; initialised to ones", etc.).
+- ✅ **Edge highlighting** when a node is selected — incident edges are
+  drawn in amber so the dataflow is visible at a glance.
+- ✅ **Color coding** for node categories: inputs / parameters / literals /
+  arithmetic / activations / reductions / normalisation / convolutions /
+  pooling / shape ops / gradient ops, with a brighter peach for the
+  output node.
+- ✅ **Live loss chart** in a docked bottom panel, auto-rescaling per
+  min/max as `EpochDone` arrives from the compute thread.
+- ✅ **`ComputeUpdate` channel protocol** — typed `GraphReady` /
+  `EpochDone` enum replaces the raw `Asg` send.
+- ✅ **Two-language UI** (English / Russian) via `--lang en|ru`.
+- ⏳ Hover-on-edge tensor stats and live forward-value preview are
+  deferred to Phase B (require the planned reverse `GuiCommand` channel
+  to request specific tensor values from the compute thread).
+
+### Phase B — Atomic mutations (1–2 sessions)
+First real interactivity. Mutations that don't change shape compatibility,
+so re-execution is cheap.
+- `Asg::replace_node_type(id, new_type)` — same input/output shape
+  required.
+- **Right-click on activation → "Replace with..."** menu:
+  ReLU ↔ GELU ↔ SiLU ↔ Sigmoid ↔ Tanh ↔ LeakyReLU ↔ ELU.
+- **Edit Literal** — slider for scalars, editable table for arrays.
+- **Pause / Step / Reset weights** controls in the GUI.
+- Mutation marks a `dirty_subtree`; only that subtree is re-evaluated,
+  not the full graph.
+- Loss chart updates immediately after mutation.
+
+The wow-effect demo: open `main.rs` running, swap `ReLU → GELU` in the
+TransformerBlock through GUI, watch loss curve change in real time.
+
+### Phase C — Insert / delete operations on edges (2–3 sessions)
+Topology changes — graph structure mutates, not just values.
+- `Asg::insert_between(parent, child, op)` — insert a node on an edge.
+- `Asg::delete_passthrough(id)` — remove a single-input/single-output
+  node, splice the edges.
+- **Right-click on edge → "Insert here..."** with palette of ops
+  (Dropout, BatchNorm, ReLU, LayerNorm, ...).
+- **Right-click on node → "Delete"** with cascade or splice options.
+- Cascade re-shape inference after structural change.
+- Rebuild gradient graph automatically (the gradient graph is
+  invalidated whenever the forward graph changes).
+- Validation: insertion only allowed when shape compatibility is
+  satisfied; user gets a red-highlighted preview when not.
+
+The wow-effect demo: training a network, click on the edge between two
+linear layers, insert Dropout(0.3), watch overfitting reduce live.
+
+### Phase D — Parameter editing (3–5 sessions)
+Layer dimensions become editable.
+- Edit `Linear::out_features` → resize weights (re-init from same
+  initialiser) → propagate new shape to downstream layers, fail-fast on
+  incompatibility.
+- Edit `Conv2d` kernel size, stride, padding, dilation, groups → re-shape-infer
+  downstream.
+- Edit `MultiHeadAttention` `embed_dim` and `num_heads` (requires Tiny
+  GPT MHA refactor first).
+- **Layer-level editor panel** with a preview of which downstream
+  parameters need reshaping; "Apply" only commits if the cascade
+  succeeds.
+- Save / load partial training checkpoints — so editing doesn't lose
+  the parameters that didn't change shape.
+
+The wow-effect demo: experiment with `hidden_dim` of FeedForward
+without restarting Python — it's not Python.
+
+### Phase E — Build-from-scratch (multi-week project)
+The full PyTorch-replacement experience without writing any Rust.
+- **Drag-and-drop palette** of all operations on the side.
+- **Snap-to-port** edge routing — only shape-compatible connections
+  light up green.
+- **Save / load model architecture as JSON** — share models without code.
+- **Pre-built templates**: "Add LeNet block", "Add Transformer block",
+  "Add ResNet residual block".
+- **Live training panel**: dataset selection, optimiser, loss function
+  — all configurable from GUI.
+- **Export to Rust code** so the visually-built model can graduate to
+  a production training script.
+
+The wow-effect demo: build, train, and inspect a small CNN end-to-end
+without touching a `cargo run`.
+
+### Why this is the project's biggest USP
+
+| What other frameworks have | RustyASG with Phases A–E |
+|---|---|
+| `print(model)` static text | Live, interactive node graph |
+| TensorBoard read-only viz | Read + edit + re-execute |
+| `model.layers[0] = ...` Python rebuild | One-click GUI mutation, live-train |
+| Read-only PyTorch profiler | Inspect + mutate in place |
+
+Implementation cost is large but bounded — Phase A alone is one
+session, Phase B is two, full set is roughly 3 months of focused work.
+None of it is research-risky: the architecture (define-then-run +
+graph-to-graph autograd + live `egui`) is already in place.
 
 ## Planned for v1.0 — Production ready
 
@@ -251,4 +416,4 @@ SafeTensors, interactive visualiser.
 
 ---
 
-*Last updated: April 2026.*
+*Last updated: April 2026 (v0.4.1).*

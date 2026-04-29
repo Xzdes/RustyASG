@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Deferred to v0.5
+### Deferred to v0.5 — Performance & correctness
 - **Tiny GPT example with `seq_len > 1`.** Blocked on a `MultiHeadAttention`
   refactor: the current `split_heads` helper hardcodes `batch=1, seq_len=1`
   via a literal `reshape(vec![1, 1, num_heads, head_dim])`. A clean rewrite
@@ -18,6 +18,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mixed precision (f16) on GPU.
 - Inference-only mode that skips autograd-graph construction.
 - Replace remaining `unwrap()`s in library code with typed `RustyAsgError`.
+
+### Planned for v0.6+ — Interactive Model Lab (the project's biggest USP)
+The ASG is a first-class object that can be edited at runtime, and the
+visualiser already renders it live. **No other Rust DL framework can do
+this** (PyTorch's TensorBoard is read-only; eager-mode frameworks have no
+graph to edit). Detailed phasing in `ROADMAP.md`:
+
+- **Phase A** — read-only inspection: click a node, see its shape, last
+  value, gradient; hover an edge for tensor stats; live loss chart.
+- **Phase B** — atomic mutations: right-click → swap activations
+  (ReLU ↔ GELU ↔ Sigmoid ↔ Tanh), edit literals, pause / step / reset.
+- **Phase C** — insert/delete ops on edges: drop a Dropout into a live
+  training run and watch overfitting reduce.
+- **Phase D** — parameter editing: resize layers, change kernel sizes,
+  re-init weights, cascade shape-inference.
+- **Phase E** — build-from-scratch: drag-and-drop palette, save/load
+  architecture as JSON, export to Rust code.
+
+The whole stack (define-then-run + graph-to-graph autograd + live `egui`
+visualiser) is already in place. Each phase is independently shippable.
+
+## [0.4.1] - 2026-04-29 — Phase A: Interactive Model Lab (read-only)
+
+This release lands **Phase A** of the long-planned **Interactive Model Lab**:
+the live `egui` graph viewer is no longer just a structure renderer — it's
+a real diagnostic and teaching tool. Library API is unchanged (purely
+additive); only the binary and the visualiser gained features.
+
+### Added — Phase A core
+- **Two-language GUI.** New `--lang en|ru` CLI flag selects English (default)
+  or Russian for every label, panel header, and tooltip in the visualiser.
+  English / Russian translations live in a single `tr()` lookup table in
+  `src/gui_viewer.rs`; new strings drop in by adding one row.
+- **Node inspector side panel.** Click any node → right-side panel shows
+  `id`, `name`, type (e.g. `LayerNorm`, `Linear`, `Conv2d`), shape, dtype,
+  whether it's a graph output, and the list of input nodes (each rendered
+  with its id and human label).
+- **Edge highlighting.** Edges incident to the selected node are drawn in
+  amber so the dataflow into/out of the inspected node is immediately
+  visible.
+- **Per-category color coding.** Inputs / parameters / literals /
+  arithmetic / activations / reductions / normalisation / convolutions /
+  pooling / shape ops / gradient ops each get a distinct fill colour.
+  Output node has a brighter peach.
+- **Live loss chart.** Bottom panel auto-renders an XY plot of training
+  loss against epoch as the compute thread emits `EpochDone` updates.
+  Auto-rescales on min/max.
+- **`ComputeUpdate` channel protocol.** The compute thread now sends a
+  typed enum (`GraphReady` / `EpochDone`) over `mpsc` instead of a raw
+  `Asg`. Future phases will add a reverse `GuiCommand` channel for
+  edits.
+
+### Added — Phase A++ educational inspector
+The Node Inspector is no longer just a list of fields — it now *teaches* the
+user what every node in the graph means. Clicking a node now shows, in plain
+English or Russian:
+
+- **What this node does** — a one-paragraph plain-language description of the
+  operation (e.g. "Element-wise addition with NumPy-style broadcasting" for
+  `Add`).
+- **Formula** — the math written out in monospace (e.g.
+  `softmax(xᵢ) = eˣⁱ / Σⱼ eˣʲ`, `y = γ · (x − μ)/√(σ² + ε) + β`).
+- **Why it's used** — the role this op plays in real architectures (GELU →
+  "the default FFN activation in modern transformers (BERT, GPT-2, ViT)";
+  MatMul → "the single most expensive op in deep nets — every Linear/Dense
+  layer and every attention head is a MatMul"; etc.).
+- **Role in this model** — for `Parameter` nodes, the inspector parses the
+  parameter name (e.g. `transformer.norm1.gamma` → LayerNorm scale,
+  `mha.w_q` → Multi-Head Attention query projection, `fc1.weights` → linear
+  layer weight matrix) and explains its specific role plus the initialisation
+  strategy (Xavier-uniform / Kaiming / Normal(0, 0.02) / ones / zeros).
+- **Graph-output marker.** When the selected node is a graph output, a clear
+  notice appears explaining that the forward pass terminates at this node.
+- **Technical details collapsed.** `id` / `name` / `type` / `shape` / `dtype`
+  / `inputs` are now in a collapsing "Technical details" section at the
+  bottom — primary screen real estate goes to the explanation.
+
+Coverage: every `NodeType` produced by current layers (TransformerBlock,
+Linear, Conv2d, ConvTranspose2d, BatchNorm, LayerNorm, all activations,
+embeddings, slice/concat, dropout, plus all the gradient-only nodes:
+`*Backward`, `*GradGamma`, `*GradBeta`, `EmbeddingGrad`, `SliceBackward`,
+`Conv2dBackwardInput/Weight`, `MaxUnpool2d`, `AvgUnpool2d`, `ReduceSumTo`).
+
+### Bumped
+- `0.4.0` → `0.4.1`. Purely additive; library public API is unchanged. The
+  GUI features ship in the binary plus the (binary-side) `gui_viewer`
+  module.
 
 ## [0.4.0] - 2026-04-25 — Phase 7: Fix what was broken
 
@@ -195,6 +282,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SafeTensors serialization + checkpointing.
 - Interactive graph visualizer (egui).
 
-[Unreleased]: https://github.com/Xzdes/RustyAsg/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Xzdes/RustyAsg/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Xzdes/RustyAsg/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/Xzdes/RustyAsg/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/Xzdes/RustyAsg/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Xzdes/RustyAsg/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Xzdes/RustyAsg/releases/tag/v0.2.0

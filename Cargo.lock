@@ -1740,9 +1740,9 @@ dependencies = [
 
 [[package]]
 name = "immutable-chunkmap"
-version = "2.1.0"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2194c61e2a29841937e84ec2264a905985c397ccccfbd4783191d3285fa92ef"
+checksum = "9a3e98b1520e49e252237edc238a39869da9f3241f2ec19dc788c1d24694d1e4"
 dependencies = [
  "arrayvec",
 ]
@@ -2908,7 +2908,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rustyasg"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "approx",
  "bytemuck",
